@@ -1,0 +1,262 @@
+@import "tailwindcss";
+
+/* "Real desktop": wide AND tall. A phone in landscape is wide (≥768px) but
+   short, so plain `md:` treats it as desktop. `desktop:` also requires height,
+   so landscape phones keep the full-screen mobile layout. */
+@custom-variant desktop (@media (min-width: 768px) and (min-height: 600px));
+
+/* ------------------------------------------------------------------ */
+/*  SWITCH design tokens — dark base + lime accent, modern & sleek      */
+/*  Token NAMES are kept from the previous build so existing utility   */
+/*  classes keep working; only the VALUES change to the new palette.   */
+/* ------------------------------------------------------------------ */
+@theme {
+  /* Accent — SWITCH lime. `banana` was the old primary token name. */
+  --color-banana: #c6f432; /* lime — primary accent, CTAs, highlights */
+  --color-mutedbanana: #8ba81f; /* deep lime — secondary / pressed */
+  --color-jungle: #5cf2a5; /* mint — success */
+  --color-pixelblue: #1b1e24; /* elevated panel */
+  --color-brown: #2a2d34; /* neutral border */
+  --color-cream: #f3f4f0; /* off-white — primary text on dark */
+  --color-pixelred: #ff5470; /* record indicator / errors */
+  --color-screen: #0a0b0d; /* near-black — app background */
+  --color-grid: #14161a; /* recessed panels / cards */
+
+  /* Signature gradient stops — white → blue → purple bloom (top-left). */
+  --bloom-white: #ffffff;
+  --bloom-blue: #5b8cff;
+  --bloom-purple: #a26bff;
+
+  /* Fonts — wired from next/font CSS variables (set in layout.tsx) */
+  --font-display: var(--font-clash), ui-sans-serif, system-ui, sans-serif;
+  --font-body: var(--font-satoshi), ui-sans-serif, system-ui, sans-serif;
+
+  /* Modern radius scale */
+  --radius-pixel: 16px; /* legacy token name, now a real radius */
+  --radius-card: 20px;
+  --radius-pill: 999px;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Base                                                              */
+/* ------------------------------------------------------------------ */
+html,
+body {
+  background-color: var(--color-screen);
+  color: var(--color-cream);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-height: 100dvh;
+  overflow-x: hidden;
+}
+
+:root {
+  font-size: 16px;
+}
+
+/* Modern focus ring */
+*:focus-visible {
+  outline: 2px solid var(--color-banana);
+  outline-offset: 2px;
+}
+
+.pixelated {
+  image-rendering: pixelated;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Signature top-left bloom (white → blue → purple over dark)         */
+/*  Rendered as a fixed background layer by <GradientField/>.          */
+/* ------------------------------------------------------------------ */
+.bloom-field {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.bloom-field::before {
+  content: "";
+  position: absolute;
+  top: -18vh;
+  left: -12vw;
+  width: min(90vw, 720px);
+  height: min(90vw, 720px);
+  background: radial-gradient(
+    circle at 30% 30%,
+    color-mix(in srgb, var(--bloom-white) 85%, transparent) 0%,
+    color-mix(in srgb, var(--bloom-blue) 70%, transparent) 32%,
+    color-mix(in srgb, var(--bloom-purple) 60%, transparent) 60%,
+    transparent 78%
+  );
+  filter: blur(46px);
+  opacity: 0.5;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Surface utilities (replace the old chunky pixel borders)          */
+/* ------------------------------------------------------------------ */
+
+/* Soft card: subtle border + depth, rounded. Kept the old class name. */
+.pixel-border {
+  border: 1px solid color-mix(in srgb, var(--color-cream) 12%, transparent);
+  border-radius: var(--radius-pixel);
+  box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.7);
+  background-clip: padding-box;
+}
+
+/* Lime-emphasised surface. */
+.pixel-border-banana {
+  border: 1px solid color-mix(in srgb, var(--color-banana) 45%, transparent);
+  border-radius: var(--radius-pixel);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-banana) 12%, transparent),
+    0 10px 30px -12px rgba(0, 0, 0, 0.7);
+}
+
+/* Frosted panel for overlays. */
+.glass {
+  background: color-mix(in srgb, var(--color-grid) 70%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid color-mix(in srgb, var(--color-cream) 10%, transparent);
+}
+
+/* Subtle lime glow (for active/selected states + hero mark). */
+.lime-glow {
+  box-shadow: 0 0 40px -8px
+    color-mix(in srgb, var(--color-banana) 55%, transparent);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Motion                                                            */
+/* ------------------------------------------------------------------ */
+
+/* Gallery cards "roll out" on mount (staggered via inline delay). */
+@keyframes roll-out {
+  0% {
+    opacity: 0;
+    transform: translateY(18px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.roll-out {
+  animation: roll-out 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Smooth entrance for page mounts (replaces the CRT power-on). */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.power-on {
+  animation: rise-in 0.32s ease-out both;
+}
+
+/* Blinking cursor (loading states). */
+.blink {
+  animation: blink 1s steps(2, start) infinite;
+}
+@keyframes blink {
+  to {
+    opacity: 0;
+  }
+}
+
+/* Skeleton shimmer. */
+.dither-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-grid) 0%,
+    var(--color-grid) 40%,
+    #1e2129 50%,
+    var(--color-grid) 60%,
+    var(--color-grid) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Record ring pulse. */
+@keyframes record-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--color-pixelred);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(255, 84, 112, 0);
+    opacity: 0.7;
+  }
+}
+.record-pulse {
+  animation: record-pulse 1s ease-in-out infinite;
+}
+
+/* Story-tutorial progress bar fill. */
+@keyframes story-fill {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Range slider — modern lime thumb                                  */
+/* ------------------------------------------------------------------ */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-cream) 14%, transparent);
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-banana);
+  border: 3px solid var(--color-screen);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-banana);
+  border: 3px solid var(--color-screen);
+  cursor: pointer;
+}
+
+/* Hide scrollbars but keep scrolling (gallery rail). */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

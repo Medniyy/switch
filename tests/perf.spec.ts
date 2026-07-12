@@ -1,0 +1,107 @@
+import { test, expect } from "@playwright/test";
+import { gotoRecord, selectNFT } from "./helpers";
+
+const NFT = { id: 909, collection: "test-perf", name: "Perf Nine" };
+
+/**
+ * Proves the live render loop is cheap once a prepared mask is loaded: over a
+ * steady-state window it must DRAW every frame but must never allocate a canvas,
+ * read back pixels (getImageData), or re-encode (toDataURL/toBlob) — i.e. no
+ * per-frame background removal / segmentation / bitmap re-decode.
+ *
+ * Instrumentation is injected before any app code and only counts calls; it does
+ * not modify the source, so nothing needs to be cleaned up in the app afterward.
+ */
+test("live loop draws per frame but never allocates/segments/re-encodes", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __counts: Record<string, number>; __t0: number };
+    w.__counts = {
+      drawImage: 0,
+      getImageData: 0,
+      createCanvas: 0,
+      toDataURL: 0,
+      toBlob: 0,
+      newImage: 0,
+    };
+    const C = CanvasRenderingContext2D.prototype;
+    const di = C.drawImage;
+    C.drawImage = function (...a: unknown[]) {
+      w.__counts.drawImage++;
+      // @ts-expect-error pass-through
+      return di.apply(this, a);
+    };
+    const gi = C.getImageData;
+    C.getImageData = function (...a: unknown[]) {
+      w.__counts.getImageData++;
+      // @ts-expect-error pass-through
+      return gi.apply(this, a);
+    };
+    const ce = document.createElement.bind(document);
+    document.createElement = function (tag: string, ...rest: unknown[]) {
+      if (String(tag).toLowerCase() === "canvas") w.__counts.createCanvas++;
+      // @ts-expect-error pass-through
+      return ce(tag, ...rest);
+    };
+    const td = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function (...a: unknown[]) {
+      w.__counts.toDataURL++;
+      // @ts-expect-error pass-through
+      return td.apply(this, a);
+    };
+    const tb = HTMLCanvasElement.prototype.toBlob;
+    HTMLCanvasElement.prototype.toBlob = function (...a: unknown[]) {
+      w.__counts.toBlob++;
+      // @ts-expect-error pass-through
+      return tb.apply(this, a);
+    };
+    const NativeImage = window.Image;
+    // @ts-expect-error override constructor for counting
+    window.Image = function (...a: unknown[]) {
+      w.__counts.newImage++;
+      return new NativeImage(...(a as []));
+    };
+  });
+
+  await gotoRecord(page);
+  await selectNFT(page, NFT);
+  await expect(page.getByText("Keep full character")).toBeVisible({
+    timeout: 30_000,
+  });
+  // Keep full character → land on the live stage with a prepared mask loaded.
+  await page.getByRole("button", { name: /keep it whole/i }).click();
+  await expect(page.getByText(NFT.name)).toBeVisible({ timeout: 20_000 });
+
+  // Let the camera + render loop reach steady state, then measure a clean window.
+  await page.waitForTimeout(700);
+  await page.evaluate(() => {
+    const w = window as unknown as { __counts: Record<string, number>; __t0: number };
+    for (const k of Object.keys(w.__counts)) w.__counts[k] = 0;
+    w.__t0 = performance.now();
+  });
+  await page.waitForTimeout(1500);
+  const res = await page.evaluate(() => {
+    const w = window as unknown as { __counts: Record<string, number>; __t0: number };
+    return { ...w.__counts, ms: performance.now() - w.__t0 };
+  });
+
+  // Loop is actually running: many draws over the window.
+  expect(res.drawImage).toBeGreaterThan(30);
+  // ...but zero heavy per-frame work.
+  expect(res.createCanvas).toBe(0); // no new canvas/bitmap allocated per frame
+  expect(res.getImageData).toBe(0); // no pixel read-back / segmentation
+  expect(res.toDataURL).toBe(0); // no re-encode
+  expect(res.toBlob).toBe(0);
+  expect(res.newImage).toBe(0); // transparent mask not re-decoded per frame
+
+  // Report the numbers into the test log for the record.
+  console.log("[perf] steady-state live loop over", Math.round(res.ms), "ms:", {
+    drawImage: res.drawImage,
+    getImageData: res.getImageData,
+    createCanvas: res.createCanvas,
+    toDataURL: res.toDataURL,
+    toBlob: res.toBlob,
+    newImage: res.newImage,
+  });
+});

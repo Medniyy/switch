@@ -1,0 +1,42 @@
+{
+  "name": "totem",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "prebuild": "node scripts/setup-mediapipe.mjs",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "setup:mediapipe": "node scripts/setup-mediapipe.mjs",
+    "data:sample": "tsx scripts/gen-sample-data.ts",
+    "data:solana": "tsx scripts/fetch-solana.ts",
+    "data:ethereum": "tsx scripts/fetch-ethereum.ts",
+    "data:covers": "tsx scripts/fetch-covers.ts",
+    "data:all": "npm run data:solana && npm run data:ethereum && npm run data:covers"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.35",
+    "embla-carousel-autoplay": "^8.6.0",
+    "embla-carousel-react": "^8.6.0",
+    "embla-carousel-wheel-gestures": "^8.1.0",
+    "lucide-react": "^1.18.0",
+    "next": "16.2.9",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "sharp": "^0.35.3",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.9",
+    "tailwindcss": "^4",
+    "tsx": "^4.22.4",
+    "typescript": "^5"
+  }
+}

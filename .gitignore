@@ -1,0 +1,63 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+/test-results/
+/playwright-report/
+/playwright/.cache/
+
+# python caches (offline mask experiments under scripts/)
+__pycache__/
+*.pyc
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+!.env.local.example
+
+# generated MediaPipe model (re-created by `npm run setup:mediapipe` / prebuild)
+/public/mediapipe/
+
+# generated collection data + marketplace covers — the scraped token indexes are
+# rebuilt locally by `npm run data:*` and deployed with the build; they are NOT
+# committed (keeps large data out of git and the "which collections + how" curation
+# out of the public repo). IP of the underlying art belongs to the respective owners.
+/public/data/*.json
+/public/collections/
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# Local release/deployment worktrees
+/.release-monkegram/
+/.release-pages/

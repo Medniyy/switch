@@ -1,0 +1,73 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import type { CollectionMeta } from "@/lib/collections";
+import { coverSrc, DEFAULT_ACCENT } from "@/lib/collections";
+
+/** One interactive collection tile in the "Choose your wear" gallery. */
+export function CollectionCard({
+  collection,
+  index,
+}: {
+  collection: CollectionMeta;
+  index: number;
+}) {
+  const [broken, setBroken] = useState(false);
+  const accent = collection.accent ?? DEFAULT_ACCENT;
+
+  return (
+    <Link
+      href={`/c/${collection.id}`}
+      className="roll-out group flex flex-col gap-3.5 w-full"
+      style={{ animationDelay: `${Math.min(index, 12) * 55}ms` }}
+    >
+      <div
+        className="relative aspect-square w-full rounded-[var(--radius-card)] overflow-hidden pixel-border transition-transform duration-200 group-hover:-translate-y-1 group-active:scale-[0.98]"
+        style={{ boxShadow: `0 14px 34px -18px ${accent}` }}
+      >
+        {/* Cover art (marketplace PFP). Falls back to an accent gradient. */}
+        {!broken ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={coverSrc(collection.id)}
+            alt={collection.name}
+            className="absolute inset-0 w-full h-full object-cover"
+            loading="lazy"
+            onError={() => setBroken(true)}
+          />
+        ) : (
+          <div
+            className="absolute inset-0"
+            style={{
+              background: `radial-gradient(circle at 30% 25%, ${accent}55, transparent 70%), var(--color-grid)`,
+            }}
+          />
+        )}
+
+        {/* chain badge */}
+        <span className="absolute top-2 left-2 glass rounded-full px-2 py-0.5 text-[9px] uppercase tracking-wider text-cream/80">
+          {collection.chain === "solana" ? "SOL" : "ETH"}
+        </span>
+
+        {/* lime ring on hover */}
+        <span
+          aria-hidden
+          className="absolute inset-0 rounded-[var(--radius-card)] ring-0 ring-inset group-hover:ring-2 transition-[box-shadow] duration-200"
+          style={{ boxShadow: `inset 0 0 0 0 ${accent}` }}
+        />
+      </div>
+
+      {/* name-tag under the card */}
+      <div className="flex items-center gap-2 px-0.5">
+        <span
+          className="w-1.5 h-1.5 rounded-full shrink-0"
+          style={{ background: accent }}
+        />
+        <span className="font-[family-name:var(--font-display)] text-sm text-cream/90 truncate">
+          {collection.tag}
+        </span>
+      </div>
+    </Link>
+  );
+}

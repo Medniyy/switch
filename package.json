@@ -8,6 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
     "setup:mediapipe": "node scripts/setup-mediapipe.mjs",
     "data:sample": "tsx scripts/gen-sample-data.ts",
     "data:solana": "tsx scripts/fetch-solana.ts",

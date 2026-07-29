@@ -1,8 +1,7 @@
 # SWITCH — Architecture
 
 A one-page map of how the app is put together. For the precomputed head-mask
-runtime see [RUNTIME-INTEGRATION.md](RUNTIME-INTEGRATION.md); for data/secrets and
-deploy see [SECURITY-AND-DEPLOYMENT.md](SECURITY-AND-DEPLOYMENT.md).
+runtime see [RUNTIME-INTEGRATION.md](RUNTIME-INTEGRATION.md).
 
 ## What it is
 

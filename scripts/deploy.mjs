@@ -13,7 +13,7 @@
  *   npm run deploy      # build + publish
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -45,6 +45,11 @@ for (const f of forbidden) {
     process.exit(1);
   }
 }
+
+// GitHub Pages runs Jekyll, which silently drops every path starting with "_".
+// Without this file the entire /_next/ bundle 404s and the site renders as
+// unstyled HTML. Written here as well as public/ so a deploy can never lose it.
+writeFileSync(resolve(out, ".nojekyll"), "");
 
 const remote = capture("git", ["remote", "get-url", "origin"], root);
 console.log(`Deploying out/ -> gh-pages on ${remote}\n`);

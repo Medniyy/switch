@@ -22,7 +22,7 @@ const satoshi = localFont({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://ath.camera/"),
+  metadataBase: new URL("https://switchsol.xyz/"),
   title: "SWITCH — Wear the Culture",
   description:
     "Wear any PFP as a live face mask, snap a photo or record a clip, and share it. Solana & Ethereum collections. Nothing leaves your device.",

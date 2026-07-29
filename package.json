@@ -7,6 +7,7 @@
     "dev:https": "next dev --experimental-https --hostname 0.0.0.0",
     "prebuild": "node scripts/setup-mediapipe.mjs",
     "build": "next build",
+    "deploy": "npm run build && node scripts/deploy.mjs",
     "start": "next start",
     "lint": "eslint",
     "test": "playwright test",

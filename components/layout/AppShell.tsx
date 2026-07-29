@@ -23,7 +23,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-dvh">
       <DesktopSidebar />
-      <main className="flex-1 min-w-0 pb-20 md:pb-0">{children}</main>
+      {/* flex-col so a page (e.g. the finder) can flex-1 to fill the content box
+          and centre itself; long pages (privacy/terms) still grow and scroll. */}
+      <main className="flex flex-1 min-w-0 flex-col pb-20 md:pb-0">{children}</main>
       <MobileNav />
     </div>
   );

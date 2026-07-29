@@ -55,6 +55,24 @@ export function useCameraStream(
 
   const retry = useCallback(() => setAttempt((a) => a + 1), []);
 
+  /**
+   * Callback ref for the <video> element. The recorder mounts the video in
+   * different places (editor preview vs live camera stage), so the element that
+   * backs `videoRef` is swapped as the user moves between them. Binding here —
+   * rather than only once inside getUserMedia — re-attaches the live stream and
+   * resumes playback on EVERY (re)mount, which is what prevents a black screen
+   * when returning from the mask editor to the camera. We only act on a real
+   * element so an unmount's `null` can't detach the stream from a fresh mount.
+   */
+  const attachVideo = useCallback((el: HTMLVideoElement | null) => {
+    if (!el) return;
+    videoRef.current = el;
+    if (streamRef.current && el.srcObject !== streamRef.current) {
+      el.srcObject = streamRef.current;
+    }
+    if (streamRef.current) el.play().catch(() => {});
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -150,5 +168,5 @@ export function useCameraStream(
     if (audioTrackRef.current) audioTrackRef.current.enabled = audioEnabled;
   }, [audioEnabled, status]);
 
-  return { videoRef, status, retry, facing, audioStatus };
+  return { videoRef, attachVideo, status, retry, facing, audioStatus };
 }

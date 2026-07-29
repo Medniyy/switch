@@ -5,19 +5,23 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Banana,
   CameraOff,
   Edit3,
   ImagePlus,
   MicOff,
   Search,
   Settings,
+  Sparkles,
   SwitchCamera,
   X,
 } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
+import { isMonkeyDaoCollection } from "@/lib/collections";
 import { useCameraStream } from "./useCameraStream";
 import { useFaceMesh } from "./useFaceMesh";
-import { FaceMaskCanvas } from "./FaceMaskCanvas";
+import { FaceMaskCanvas, type LiveMaskTrack } from "./FaceMaskCanvas";
+import { MASK_UP_NUDGE } from "@/lib/imageUtils";
 import { MaskSettings, MaskQuickToggles } from "./MaskControls";
 import { RecordButton } from "./RecordButton";
 import { useMediaRecorder } from "@/components/recorder/useMediaRecorder";
@@ -25,10 +29,10 @@ import { VideoPreview } from "@/components/recorder/VideoPreview";
 import { DownloadButton } from "@/components/recorder/DownloadButton";
 import { PixelButton } from "@/components/ui/PixelButton";
 import { BlinkingCursor } from "@/components/ui/BlinkingCursor";
-import { PhotoEditor } from "@/components/photo/PhotoEditor";
+import { PhotoEditor, type InitialPlacement } from "@/components/photo/PhotoEditor";
 import { MaskPreparationFlow } from "@/components/mask-prep/MaskPreparationFlow";
 import {
-  photoFromCanvas,
+  captureFrame,
   photoFromFile,
   type CapturedPhoto,
   type PhotoResult,
@@ -44,6 +48,7 @@ import {
   type MaskFit,
   type SavedUserMask,
 } from "@/lib/userMasks";
+import { useLockBodyScroll } from "@/lib/useLockBodyScroll";
 import type { NFT } from "@/lib/types";
 
 interface RuntimeMask {
@@ -69,9 +74,14 @@ export function RecordView() {
   const setCaptureMode = useAppStore((s) => s.setCaptureMode);
   const cameraFacing = useAppStore((s) => s.cameraFacing);
   const setCameraFacing = useAppStore((s) => s.setCameraFacing);
+  const cameraMirror = useAppStore((s) => s.cameraMirror);
+  const bananaRain = useAppStore((s) => s.bananaRain);
+  const setBananaRain = useAppStore((s) => s.setBananaRain);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Latest live mask draw (canvas space) — read once at shutter time.
+  const liveTrackRef = useRef<LiveMaskTrack | null>(null);
   // Shared between the camera hook (which fills it) and the recorder (which reads
   // it). Owned here so we can also gate camera/mic acquisition below.
   const audioTrackRef = useRef<MediaStreamTrack | null>(null);
@@ -81,21 +91,33 @@ export function RecordView() {
   const [faceDetected, setFaceDetected] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [captured, setCaptured] = useState<CapturedPhoto | null>(null);
+  // Where the mask sat on the face at shutter time — seeds the editor's
+  // pre-placed PFP for camera captures (null = centered, e.g. uploads).
+  const [capturedPlacement, setCapturedPlacement] =
+    useState<InitialPlacement | null>(null);
   const [photoResult, setPhotoResult] = useState<PhotoResult | null>(null);
   const [bootedLastMask, setBootedLastMask] = useState(false);
   const [runtimeMask, setRuntimeMask] = useState<RuntimeMask | null>(null);
   const [maskLoadStatus, setMaskLoadStatus] = useState<MaskLoadStatus>("idle");
   const [maskLoadMessage, setMaskLoadMessage] = useState<string | null>(null);
   const [editingMask, setEditingMask] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  // The secret MonkeyDAO (SMB Gen2/Gen3) filter menu — gated by stable id.
+  const monkeyDao = isMonkeyDaoCollection(selectedNFT?.collection);
 
   // Run the camera/mic only while the live stage is on screen — not while a clip
   // is previewing or a photo is being edited. Holding the mic open during preview
   // makes Android duck the playback volume (see useCameraStream).
   const liveActive = !!selectedNFT && !result && !photoResult && !captured;
 
-  const { videoRef, status: camStatus, retry, audioStatus } =
+  const { videoRef, attachVideo, status: camStatus, retry, audioStatus } =
     useCameraStream(audioTrackRef, liveActive);
   const { landmarkerRef, status: meshStatus } = useFaceMesh();
+
+  // The whole recorder (camera + editor) is a fixed camera-app viewport — never
+  // let the document itself scroll behind it.
+  useLockBodyScroll(true);
 
   useEffect(() => {
     if (selectedNFT || bootedLastMask) return;
@@ -182,11 +204,35 @@ export function RecordView() {
   const showControls =
     !anyResult && !inEditor && !preparingMask && !!runtimeMask && supported;
 
+  // Snap the RAW camera frame (not the composited canvas) and continue into the
+  // photo editor — the same complete flow as an uploaded photo, for EVERY
+  // collection: add more PFPs, move/scale/rotate/flip/edit each one, and export
+  // only after finishing. The worn mask is pre-placed exactly where it sat on
+  // the face at shutter time (via the live tracking snapshot).
   const takePhoto = async () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const shot = await photoFromCanvas(canvas);
-    if (shot) setPhotoResult(shot);
+    const video = videoRef.current;
+    if (!video) return;
+    let shot = captureFrame(video, cameraMirror);
+    // The stream can report "ready" a few frames before the video exposes its
+    // dimensions — briefly wait for the first decodable frame instead of
+    // silently dropping the tap.
+    for (let i = 0; i < 30 && !shot; i++) {
+      await new Promise((r) => requestAnimationFrame(r));
+      shot = captureFrame(video, cameraMirror);
+    }
+    if (!shot) return;
+    const track = liveTrackRef.current;
+    setCapturedPlacement(
+      track
+        ? placementFromLiveTrack(
+            track,
+            shot,
+            cameraMirror,
+            runtimeMask?.record.maskFlip ?? false
+          )
+        : null
+    );
+    setCaptured(shot);
   };
 
   // Use your own picture as the base instead of the camera — decoded fully in the
@@ -198,6 +244,7 @@ export function RecordView() {
     const shot = await photoFromFile(file);
     if (shot) {
       setCaptureMode("photo");
+      setCapturedPlacement(null); // no face placement for an uploaded base
       setCaptured(shot);
     }
   };
@@ -207,6 +254,18 @@ export function RecordView() {
     setPhotoResult(null);
     setCaptured(null);
   };
+
+  // Leave the photo flow for Home. Clears ONLY the temporary composition state
+  // (captured frame, placement seed, any result blob URL) — saved masks in
+  // IndexedDB and the wearing selection are untouched. Client-side navigation;
+  // unmounting the live stage stops the camera via useCameraStream's cleanup.
+  const exitToHome = useCallback(() => {
+    if (photoResult) URL.revokeObjectURL(photoResult.url);
+    setPhotoResult(null);
+    setCaptured(null);
+    setCapturedPlacement(null);
+    router.push("/");
+  }, [photoResult, router]);
 
   const chooseAnotherPfp = useCallback(() => {
     setSelectedNFT(null);
@@ -293,7 +352,7 @@ export function RecordView() {
     return (
       <>
         <video
-          ref={videoRef}
+          ref={attachVideo}
           playsInline
           muted
           autoPlay
@@ -314,7 +373,7 @@ export function RecordView() {
   }
 
   return (
-    <div className="min-h-dvh bg-screen flex items-center justify-center desktop:p-6">
+    <div className="h-[100dvh] overflow-hidden bg-screen flex items-center justify-center desktop:p-6">
       {/* Full-screen camera stage with overlay controls (camera-app style).
           Mobile: portrait, edge-to-edge (object-cover fills the phone). Desktop:
           a large landscape frame at the camera's native aspect so you see the
@@ -322,7 +381,7 @@ export function RecordView() {
       <div className="relative w-full h-dvh desktop:h-[82vh] desktop:w-auto desktop:aspect-video desktop:max-w-[94vw] bg-grid overflow-hidden desktop:pixel-border">
         {/* Hidden source video (kept rendered so it keeps decoding) */}
         <video
-          ref={videoRef}
+          ref={attachVideo}
           playsInline
           muted
           autoPlay
@@ -339,6 +398,7 @@ export function RecordView() {
             placement={runtimeMask?.record.placement ?? null}
             maskFlip={runtimeMask?.record.maskFlip ?? false}
             fit={preparedFit}
+            trackRef={liveTrackRef}
             onFaceChange={setFaceDetected}
             className="absolute inset-0 w-full h-full object-cover desktop:object-contain"
           />
@@ -349,6 +409,12 @@ export function RecordView() {
           <PhotoEditor
             photo={captured}
             initialNFT={selectedNFT}
+            initialMaskImage={runtimeMask?.image ?? null}
+            initialPlacement={capturedPlacement}
+            onExitHome={exitToHome}
+            videoRef={videoRef}
+            landmarkerRef={landmarkerRef}
+            canvasRef={canvasRef}
             onDone={(r) => {
               setPhotoResult(r);
               setCaptured(null);
@@ -404,6 +470,25 @@ export function RecordView() {
               maskFlip={runtimeMask?.record.maskFlip ?? false}
               onToggleMaskFlip={toggleMaskFlip}
             />
+            {monkeyDao && (
+              <button
+                onClick={() => setFiltersOpen(true)}
+                aria-label="Filters"
+                aria-pressed={bananaRain}
+                title="Filters"
+                className={`relative w-11 h-11 rounded-full border-[2px] flex items-center justify-center backdrop-blur-sm transition-colors active:scale-95 ${
+                  bananaRain
+                    ? "bg-banana text-screen border-banana"
+                    : "bg-screen/55 text-cream border-cream/40"
+                }`}
+              >
+                <Sparkles size={19} strokeWidth={2.5} />
+                {/* Secret banana indicator — hints the MonkeyDAO-only filter. */}
+                <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-banana text-screen">
+                  <Banana size={10} strokeWidth={3} />
+                </span>
+              </button>
+            )}
             {isPhoto && (
               <button
                 onClick={() =>
@@ -608,6 +693,68 @@ export function RecordView() {
           </div>
         )}
 
+        {/* Filters sheet (MonkeyDAO only) — the secret Banana Rain */}
+        {filtersOpen && monkeyDao && !anyResult && !inEditor && (
+          <div className="absolute inset-0 z-40 flex items-end">
+            <button
+              className="absolute inset-0 bg-screen/60"
+              onClick={() => setFiltersOpen(false)}
+              aria-label="Close filters"
+            />
+            <div className="relative w-full bg-screen border-t-[3px] border-banana p-5 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+              <div className="flex items-center justify-between mb-4">
+                <span className="flex items-center gap-2 font-[family-name:var(--font-display)] text-banana text-xs">
+                  <Banana size={16} strokeWidth={2.5} />
+                  MONKEYDAO FILTERS
+                </span>
+                <button
+                  onClick={() => setFiltersOpen(false)}
+                  aria-label="Close"
+                  className="text-cream active:scale-95"
+                >
+                  <X size={18} strokeWidth={3} />
+                </button>
+              </div>
+              <button
+                onClick={() => setBananaRain(!bananaRain)}
+                aria-pressed={bananaRain}
+                className={`flex w-full items-center gap-3 rounded-2xl border-[2px] p-4 text-left transition-colors ${
+                  bananaRain
+                    ? "border-banana bg-banana/10"
+                    : "border-cream/25 bg-white/5"
+                }`}
+              >
+                <span
+                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${
+                    bananaRain ? "bg-banana text-screen" : "bg-cream/10 text-banana"
+                  }`}
+                >
+                  <Banana size={22} strokeWidth={2.5} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block font-[family-name:var(--font-display)] text-[11px] text-cream">
+                    Banana Rain
+                  </span>
+                  <span className="block text-sm text-cream/55">
+                    A banana shower over your shot.
+                  </span>
+                </span>
+                <span
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                    bananaRain ? "bg-banana" : "bg-cream/25"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-screen transition-transform ${
+                      bananaRain ? "translate-x-[22px]" : "translate-x-0.5"
+                    }`}
+                  />
+                </span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Settings sheet (gear) — opacity / size / quality */}
         {settingsOpen && !anyResult && !inEditor && (
           <div className="absolute inset-0 z-40 flex items-end">
@@ -659,6 +806,37 @@ function fitFromSavedMask(record: SavedUserMask): MaskFit {
     anchorOffsetY: record.anchorOffsetY,
     scaleOffset: record.scaleOffset,
   };
+}
+
+/**
+ * Convert the live mask draw (canvas space, drawn around its facial anchor,
+ * possibly inside a mirrored context) into an editor slot placement (captured-
+ * photo space, centred box). The captured frame applies the same mirror as the
+ * live canvas, so a mirrored capture flips x, negates roll and toggles flip.
+ */
+function placementFromLiveTrack(
+  t: LiveMaskTrack,
+  shot: CapturedPhoto,
+  mirrored: boolean,
+  maskFlip: boolean
+): InitialPlacement {
+  const s = shot.w / t.canvasW; // canvas is an aspect-true scale of the video
+  // The drawn square's centre, offset from the facial anchor in mask-local
+  // space (the local x mirrors under mask flip), then rotated by the head roll.
+  const ox = (0.5 - t.anchorX) * t.drawWidth * (maskFlip ? -1 : 1);
+  const oy = (0.5 - (t.anchorY + MASK_UP_NUDGE)) * t.drawWidth;
+  const cos = Math.cos(t.rotation);
+  const sin = Math.sin(t.rotation);
+  let cx = t.centerX + ox * cos - oy * sin;
+  const cy = t.centerY + ox * sin + oy * cos;
+  let rotation = t.rotation;
+  let flip = maskFlip;
+  if (mirrored) {
+    cx = t.canvasW - cx;
+    rotation = -rotation;
+    flip = !flip;
+  }
+  return { cx: cx * s, cy: cy * s, size: t.drawWidth * s, rotation, flip };
 }
 
 function StageOverlay({ children }: { children: React.ReactNode }) {

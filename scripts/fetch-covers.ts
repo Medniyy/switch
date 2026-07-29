@@ -6,10 +6,17 @@
  *
  * Run once locally: `npm run data:covers`.
  */
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { COLLECTIONS, type CollectionMeta } from "../lib/collections";
-import { loadEnv, fetchJSON, ensureDir, COVERS_DIR, sleep } from "./_util";
+import {
+  loadEnv,
+  fetchJSON,
+  ensureDir,
+  COVERS_DIR,
+  DATA_DIR,
+  sleep,
+} from "./_util";
 import { rpc, imageOf, resolveCollectionAddress, type DasAsset } from "./_solana";
 
 loadEnv();
@@ -34,6 +41,25 @@ async function ethereumCoverUrl(meta: CollectionMeta): Promise<string | null> {
   return data.image_url ?? null;
 }
 
+/**
+ * Fallback cover: the collection's lowest-numbered token, read from the already
+ * generated public/data/<id>.json. Metaplex Core collections (e.g. Sensei) often
+ * carry no art of their own, and a PFP from the set is exactly what the card
+ * shows for every other collection anyway.
+ */
+function firstTokenImage(id: string): string | null {
+  const file = resolve(DATA_DIR, `${id}.json`);
+  if (!existsSync(file)) return null;
+  const data = JSON.parse(readFileSync(file, "utf8")) as Record<
+    string,
+    { image?: string }
+  >;
+  const first = Object.keys(data)
+    .map(Number)
+    .sort((a, b) => a - b)[0];
+  return data[String(first)]?.image ?? null;
+}
+
 async function download(url: string, dest: string): Promise<void> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -45,14 +71,16 @@ async function download(url: string, dest: string): Promise<void> {
   ensureDir(COVERS_DIR);
   for (const c of COLLECTIONS) {
     try {
-      const url =
+      const primary =
         c.fetch.via === "helius"
           ? await solanaCoverUrl(c)
           : await ethereumCoverUrl(c);
+      const url = primary ?? firstTokenImage(c.id);
       if (!url) {
         console.log(`- ${c.id}: no cover url (skipped)`);
         continue;
       }
+      if (!primary) console.log(`  (${c.id}: using first token as cover)`);
       await download(url, resolve(COVERS_DIR, `${c.id}.png`));
       console.log(`✓ ${c.id}.png`);
     } catch (err) {

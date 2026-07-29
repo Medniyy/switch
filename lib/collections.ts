@@ -29,6 +29,17 @@ export type FetchSource =
       slug: string;
       /** Optional explicit contract; auto-resolved from the slug when omitted. */
       contract?: string;
+    }
+  | {
+      via: "contract";
+      /** ERC-721 contract — `tokenURI` resolves the metadata (IPFS directory or
+       *  HTTPS API), `totalSupply` the token count. No API key, just a public RPC. */
+      contract: string;
+      /** First token id (0 for most ERC-721 sets, 1 for some). */
+      firstId: number;
+      /** Token count, when `totalSupply` isn't the minted id range — burns make
+       *  the two diverge, and the index should still cover every minted id. */
+      supply?: number;
     };
 
 export interface CollectionMeta {
@@ -96,12 +107,12 @@ export const COLLECTIONS: CollectionMeta[] = [
     fetch: { via: "helius", meSymbol: "bodoggos" },
   },
   {
-    id: "degods",
-    name: "DeGods",
-    tag: "DeGods",
+    id: "sensei",
+    name: "Sensei",
+    tag: "Sensei",
     chain: "solana",
-    accent: "#E7E7E7",
-    fetch: { via: "helius", meSymbol: "degods" },
+    accent: "#4E7CD6",
+    fetch: { via: "helius", meSymbol: "sensei" },
   },
 
   // ---- Ethereum ----
@@ -111,12 +122,26 @@ export const COLLECTIONS: CollectionMeta[] = [
     tag: "Pudgy Penguins",
     chain: "ethereum",
     accent: "#5CA9E6",
-    // Hidden until the Ethereum data is fetched (needs an OpenSea API key).
-    hidden: true,
+    // Sourced straight from the contract's own IPFS metadata rather than
+    // OpenSea, so the index rebuilds with no API key (npm run data:contract).
     fetch: {
-      via: "opensea",
-      slug: "pudgypenguins",
+      via: "contract",
       contract: "0xbd3531da5cf5857e7cfaa92426877b022e612cf8",
+      firstId: 0,
+    },
+  },
+  {
+    id: "lil-pudgys",
+    name: "Lil Pudgys",
+    tag: "Lil Pudgys",
+    chain: "ethereum",
+    accent: "#7FC5F2",
+    fetch: {
+      via: "contract",
+      contract: "0x524cab2ec69124574082676e6f654a18df49a048",
+      firstId: 0,
+      // 291 burned, so totalSupply() (21931) is short of the minted range 0…22221.
+      supply: 22222,
     },
   },
   {
@@ -144,6 +169,17 @@ export const DEFAULT_ACCENT = "#C6F432";
 
 export function getCollection(id: string): CollectionMeta | undefined {
   return COLLECTIONS.find((c) => c.id === id);
+}
+
+/**
+ * The MonkeyDAO collections — Solana Monkey Business Gen2 & Gen3 — which unlock
+ * the secret "Banana Rain" filter. Gated by stable collection id (never by
+ * display-name string matching) so renames can't accidentally expose or hide it.
+ */
+export const MONKEY_DAO_COLLECTION_IDS = ["smb-gen2", "smb-gen3"] as const;
+
+export function isMonkeyDaoCollection(id: string | null | undefined): boolean {
+  return !!id && (MONKEY_DAO_COLLECTION_IDS as readonly string[]).includes(id);
 }
 
 /** Cover image path for a collection card (marketplace PFP, downloaded at build). */

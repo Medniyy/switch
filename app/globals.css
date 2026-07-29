@@ -1,33 +1,38 @@
 @import "tailwindcss";
 
-/* "Real desktop": wide AND tall. A phone in landscape is wide (≥768px) but
+/* "Real desktop": wide AND tall. A phone in landscape is wide (â‰¥768px) but
    short, so plain `md:` treats it as desktop. `desktop:` also requires height,
    so landscape phones keep the full-screen mobile layout. */
 @custom-variant desktop (@media (min-width: 768px) and (min-height: 600px));
 
+/* "Short" viewport â€” a phone in landscape (or any very short window). Used to
+   compact the welcome-screen chrome so the collection carousel keeps a usable
+   height instead of collapsing. Height-based, so it never fires on tall desktop. */
+@custom-variant short (@media (max-height: 480px));
+
 /* ------------------------------------------------------------------ */
-/*  SWITCH design tokens — dark base + lime accent, modern & sleek      */
+/*  SWITCH design tokens â€” dark base + lime accent, modern & sleek      */
 /*  Token NAMES are kept from the previous build so existing utility   */
 /*  classes keep working; only the VALUES change to the new palette.   */
 /* ------------------------------------------------------------------ */
 @theme {
-  /* Accent — SWITCH lime. `banana` was the old primary token name. */
-  --color-banana: #c6f432; /* lime — primary accent, CTAs, highlights */
-  --color-mutedbanana: #8ba81f; /* deep lime — secondary / pressed */
-  --color-jungle: #5cf2a5; /* mint — success */
+  /* Accent â€” SWITCH lime. `banana` was the old primary token name. */
+  --color-banana: #c6f432; /* lime â€” primary accent, CTAs, highlights */
+  --color-mutedbanana: #8ba81f; /* deep lime â€” secondary / pressed */
+  --color-jungle: #5cf2a5; /* mint â€” success */
   --color-pixelblue: #1b1e24; /* elevated panel */
   --color-brown: #2a2d34; /* neutral border */
-  --color-cream: #f3f4f0; /* off-white — primary text on dark */
+  --color-cream: #f3f4f0; /* off-white â€” primary text on dark */
   --color-pixelred: #ff5470; /* record indicator / errors */
-  --color-screen: #0a0b0d; /* near-black — app background */
+  --color-screen: #0a0b0d; /* near-black â€” app background */
   --color-grid: #14161a; /* recessed panels / cards */
 
-  /* Signature gradient stops — white → blue → purple bloom (top-left). */
+  /* Signature gradient stops â€” white â†’ blue â†’ purple bloom (top-left). */
   --bloom-white: #ffffff;
   --bloom-blue: #5b8cff;
   --bloom-purple: #a26bff;
 
-  /* Fonts — wired from next/font CSS variables (set in layout.tsx) */
+  /* Fonts â€” wired from next/font CSS variables (set in layout.tsx) */
   --font-display: var(--font-clash), ui-sans-serif, system-ui, sans-serif;
   --font-body: var(--font-satoshi), ui-sans-serif, system-ui, sans-serif;
 
@@ -69,7 +74,7 @@ body {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Signature top-left bloom (white → blue → purple over dark)         */
+/*  Signature top-left bloom (white â†’ blue â†’ purple over dark)         */
 /*  Rendered as a fixed background layer by <GradientField/>.          */
 /* ------------------------------------------------------------------ */
 .bloom-field {
@@ -222,7 +227,7 @@ body {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Range slider — modern lime thumb                                  */
+/*  Range slider â€” modern lime thumb                                  */
 /* ------------------------------------------------------------------ */
 input[type="range"] {
   -webkit-appearance: none;

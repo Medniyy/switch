@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:https": "next dev --experimental-https --hostname 0.0.0.0",
     "prebuild": "node scripts/setup-mediapipe.mjs",
     "build": "next build",
     "start": "next start",
@@ -14,8 +15,9 @@
     "data:sample": "tsx scripts/gen-sample-data.ts",
     "data:solana": "tsx scripts/fetch-solana.ts",
     "data:ethereum": "tsx scripts/fetch-ethereum.ts",
+    "data:contract": "tsx scripts/fetch-contract.ts",
     "data:covers": "tsx scripts/fetch-covers.ts",
-    "data:all": "npm run data:solana && npm run data:ethereum && npm run data:covers"
+    "data:all": "npm run data:solana && npm run data:ethereum && npm run data:contract && npm run data:covers"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.35",

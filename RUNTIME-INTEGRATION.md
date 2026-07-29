@@ -11,16 +11,20 @@ selectedNFT {collection, id}
       → fetch /masks/<collection>/index.json   (once per collection, cached)
       → look up String(id)
       → load /masks/<collection>/<id>.webp
-  → status: "loading" | "available" | "unavailable"
-      available   → composite the head mask by anchor/scale (computeMaskBox)
-      unavailable → legacy path: full remote PFP + browser chroma-key
+  → status: "loading" | "available" | "unsupported" | "rejected"
+      available   → composite the head mask by anchor + scale + roll
+                    (computeMaskTransform, see Placement below)
+      unsupported → legacy path: full remote PFP + browser chroma-key
+      rejected    → prepared mask failed runtime approval; NO legacy fallback
+                    (show a "not ready" state — see useHeadMask)
       loading     → neither (avoids a flash of the heavy legacy path)
 ```
 
 - **Video / live camera:** [RecordView](components/ar/RecordView.tsx) picks the
   mask over the legacy `useNFTImage`+`useCutoutImage`, and passes `placement` to
-  [FaceMaskCanvas](components/ar/FaceMaskCanvas.tsx), which draws it with
-  `computeMaskBox` instead of the centered `computeFaceBox`. When a mask is used,
+  [FaceMaskCanvas](components/ar/FaceMaskCanvas.tsx), which draws it with a full
+  similarity transform (`computeMaskTransform` for a placement mask,
+  `computeCenteredMaskTransform` for a user-prepared one). When a mask is used,
   `removeBackground` is **never called**.
 - **Photo editor:** [PhotoEditor](components/photo/PhotoEditor.tsx) seeds the
   pre-placed slot from the mask when available (the slot is drag/`object-contain`,
@@ -37,7 +41,8 @@ Written by [build-test-batch.ts](scripts/build-test-batch.ts) to
 ```json
 { "3": { "maskUrl": "/masks/mad-lads/3.webp", "thumbUrl": "/thumbs/mad-lads/3.webp",
          "anchorX": 0.5, "anchorY": 0.54, "scale": 1, "faceScale": 0.42,
-         "qualityScore": 0.92, "needsReview": false } }
+         "qualityScore": 0.92, "needsReview": false,
+         "approvedForRuntime": true, "rejectionReasons": [] } }
 ```
 
 - URLs are stored **without** `BASE_PATH`; the runtime joins it via
@@ -45,25 +50,49 @@ Written by [build-test-batch.ts](scripts/build-test-batch.ts) to
 - It only contains the ~100-token **test batch**, not the whole collection. Tokens
   outside it correctly use the legacy fallback — expected, not a bug.
 
-## Placement (`computeMaskBox`, [lib/imageUtils.ts](lib/imageUtils.ts))
+## Placement (`computeMaskTransform`, [lib/imageUtils.ts](lib/imageUtils.ts))
 
 The mask WebP has its face at normalized `(anchorX, anchorY)` inside the square,
-spanning `faceScale` of the square's width. To map the mask's face onto the live
-face (ear-to-ear width `faceW`, centre `cx,cy` from FaceMesh):
+spanning `faceScale` of the square's width. The renderer maps that onto the live
+face as a 2D **similarity transform** (centre + uniform scale + in-plane roll),
+NOT an axis-aligned box — so the mask tracks head tilt. From FaceMesh:
 
 ```
-dw = faceW * (K + sizeOffset) / faceScale     // K = 1.15 framing multiplier
-dw = dh                                         // square
-dx = cx - anchorX * dw
-dy = cy - anchorY * dw - dw * 0.06              // 6% upward nudge (eyes over eyes)
+faceW     = hypot(ear→ear)                    // Euclidean → roll-invariant
+centerX   = ear midpoint x
+centerY   = forehead↔chin midpoint y
+rotation  = eye-line angle                     // in-plane roll (radians)
+drawWidth = clamp(faceW * (K + sizeOffset) / faceScale,
+                  faceW * 1.2, faceW * 8)      // K = 1.15 (MASK_TRACK_K)
 ```
 
-- **Flip:** not handled here. FaceMaskCanvas applies one geometric mirror
-  (`translate(w,0); scale(-1,1)`); under it `dx = cx - anchorX*dw` stays correct,
-  so the anchor is **not** mirrored (avoids double-mirroring).
+The mask is then drawn AROUND its facial anchor:
+
+```
+translate(centerX, centerY); rotate(rotation); [flip];
+drawImage(mask, -anchorX*dw, -(anchorY + 0.06)*dw, dw, dw)   // 0.06 = MASK_UP_NUDGE
+```
+
+where `dw = drawWidth * BASE_COVERAGE_SCALE * rollCoverageScale(rotation)` — a
+small, capped overhang so the avatar hides the real hairline.
+
+- **User-prepared masks** (no placement) use `computeCenteredMaskTransform`, which
+  returns the SAME shape with the anchor at the square centre (0.5, 0.5) and
+  `drawWidth = max(faceW, faceH) * (1.4 + sizeOffset)`. Both paths share one
+  smoothed, rotated draw.
+- **Manual fit** (`applyMaskFit`) adds the user's left/right, up/down and scale
+  offsets in the mask's LOCAL (rotated) frame, so a positioned mask stays attached
+  under roll.
+- **Smoothing:** every transform is time-based EMA-smoothed with per-frame outlier
+  clamps (`smooth` in FaceMaskCanvas), so tracking never jitters or teleports.
+- **Flip:** not handled in the math. FaceMaskCanvas applies one geometric mirror
+  (`translate(w,0); scale(-1,1)`); under it the centre/rotation stay correct, so
+  the anchor is **not** mirrored (avoids double-mirroring).
 - **`scale`:** already baked into the WebP at compose time — **not** re-applied.
-- **Guards:** `sizeMultiplier = max(0.5, K + sizeOffset)`; if `faceScale` is
-  missing/invalid, `FACE_SCALE_FALLBACK = 0.42` is used (no divide-by-zero / NaN).
+- **Guards:** `sanitizePlacement` drops an implausible anchor/faceScale back to the
+  centered transform; a missing/invalid `faceScale` falls back to
+  `FACE_SCALE_FALLBACK = 0.42` (no divide-by-zero / NaN); `drawWidth` is
+  hard-clamped to `[faceW*1.2, faceW*8]` so even corrupt metadata can't explode it.
 - `faceScale = seg.faceWidth / side` (the detected facial core over the final
   square), added to metadata in [process.ts](scripts/mask/process.ts).
 
@@ -85,7 +114,7 @@ Headless placement check (proof the formula lands the face on target):
 RecordView logs which path each selection takes:
 
 ```
-[head-mask] precomputed mask: mad-lads/123     ← mask used, removeBackground NOT called
-[head-mask] legacy fallback: smb-gen2/456      ← old chroma-key path
-[head-mask] loading needsReview mask: mad-lads/481   ← flagged mask, still loaded
+[head-mask] precomputed mask: mad-lads/123                    ← mask used, removeBackground NOT called
+[head-mask] unsupported token, legacy fallback: smb-gen2/456  ← old chroma-key path
+[head-mask] rejected precomputed mask: mad-lads/481           ← failed approval, NOT used (no fallback)
 ```

@@ -52,9 +52,9 @@ function PadKey({
     <button
       onClick={onClick}
       className={`
-        h-12 flex items-center justify-center
+        h-11 landscape:h-9 flex items-center justify-center
         ${toneClasses} pixel-border
-        font-[family-name:var(--font-body)] text-3xl
+        font-[family-name:var(--font-body)] text-3xl landscape:text-2xl
         active:translate-x-[4px] active:translate-y-[4px] active:shadow-none
         transition-transform duration-75
       `}

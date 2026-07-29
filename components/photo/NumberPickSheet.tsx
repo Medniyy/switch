@@ -5,9 +5,9 @@ import { X } from "lucide-react";
 import type { Collection, NFT } from "@/lib/types";
 import { getNFT } from "@/lib/nftData";
 import { getCollection } from "@/lib/collections";
-import { useAppStore } from "@/store/useAppStore";
 import { useNFTImage } from "@/components/ar/useNFTImage";
 import { useCutoutImage } from "@/components/ar/useCutoutImage";
+import { resolveSavedMaskImage } from "@/lib/resolveMask";
 import { NumberPad } from "@/components/search/NumberPad";
 import { PixelButton } from "@/components/ui/PixelButton";
 import { BlinkingCursor } from "@/components/ui/BlinkingCursor";
@@ -18,7 +18,10 @@ type Status = "idle" | "loading" | "found" | "notfound";
 
 interface NumberPickSheetProps {
   collectionDefault: Collection;
-  onPick: (nft: NFT, cutout: HTMLImageElement) => void;
+  /** Hands back the chosen token, the mask image that would currently be used
+   *  (saved blob when one exists, else the on-device cutout), and whether a saved
+   *  customized mask exists — so the caller can offer the right prep choice. */
+  onPick: (nft: NFT, image: HTMLImageElement, hasSaved: boolean) => void;
   onClose: () => void;
 }
 
@@ -33,7 +36,6 @@ export function NumberPickSheet({
   onPick,
   onClose,
 }: NumberPickSheetProps) {
-  const removeBg = useAppStore((s) => s.mask.removeBg);
   // A photo can only add more tokens from the collection you're already wearing.
   const collection: Collection = collectionDefault;
   const meta = getCollection(collection);
@@ -47,11 +49,36 @@ export function NumberPickSheet({
     setResult(null);
   }, [query]);
 
-  // Load + cut out the found monke (CORS-clean image; cutout falls back to the
-  // raw image when the background isn't flat enough).
-  const { image: rawImage } = useNFTImage(result?.image);
-  const cutout = useCutoutImage(rawImage, removeBg);
-  const ready = !!cutout && cutout.complete && cutout.naturalWidth > 0;
+  // Prefer the user's SAVED mask for this token (so an added PFP wears the same
+  // customized/full choice as everywhere else); fall back to the on-device cutout
+  // of the raw art only when nothing is saved.
+  const [savedImage, setSavedImage] = useState<HTMLImageElement | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setSavedImage(null);
+    if (!result) return;
+    resolveSavedMaskImage(result).then((img) => {
+      if (!cancelled) setSavedImage(img);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [result]);
+
+  // Background removal ALWAYS runs for a fresh PFP (never gated by collection,
+  // settings or timing) — `settled` guards against selecting the un-processed
+  // art while the cutout is still computing.
+  const { image: rawImage, status: rawStatus } = useNFTImage(
+    savedImage ? undefined : result?.image
+  );
+  const { image: cutout, settled } = useCutoutImage(rawImage, !savedImage);
+  const effective = savedImage ?? cutout;
+  const artFailed = !savedImage && rawStatus === "error";
+  const ready =
+    !!effective &&
+    effective.complete &&
+    effective.naturalWidth > 0 &&
+    (!!savedImage || settled);
 
   const runSearch = async () => {
     const num = Number(query);
@@ -129,21 +156,27 @@ export function NumberPickSheet({
             <div className="w-full max-w-xs flex flex-col items-center gap-3">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={cutout?.src ?? result.image}
+                src={effective?.src ?? result.image}
                 alt={result.name}
                 className="w-28 h-28 object-contain pixel-border bg-grid"
               />
               <p className="font-[family-name:var(--font-display)] text-banana text-[10px]">
                 {result.name}
               </p>
-              <PixelButton
-                size="lg"
-                onClick={() => cutout && onPick(result, cutout)}
-                disabled={!ready}
-                className="w-full"
-              >
-                {ready ? "WEAR THIS" : "PREPARING…"}
-              </PixelButton>
+              {artFailed ? (
+                <p className="font-[family-name:var(--font-display)] text-pixelred text-[10px] text-center">
+                  [ ARTWORK COULD NOT LOAD — TRY AGAIN LATER ]
+                </p>
+              ) : (
+                <PixelButton
+                  size="lg"
+                  onClick={() => effective && onPick(result, effective, !!savedImage)}
+                  disabled={!ready}
+                  className="w-full"
+                >
+                  {ready ? "SELECT" : "PREPARING…"}
+                </PixelButton>
+              )}
             </div>
           )}
         </div>

@@ -10,6 +10,7 @@ import { loadEnv, writeData, numberFromName, sleep } from "./_util";
 import {
   rpc,
   imageOf,
+  nameOf,
   resolveCollectionAddress,
   type DasAsset,
 } from "./_solana";
@@ -43,7 +44,7 @@ async function fetchCollection(meta: CollectionMeta): Promise<void> {
     const items = result.items ?? [];
     if (items.length === 0) break;
     for (const a of items) {
-      const name = a.content?.metadata?.name;
+      const name = nameOf(a);
       const num = numberFromName(name);
       const image = imageOf(a);
       if (num === null || !image || !name) {

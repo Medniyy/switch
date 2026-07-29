@@ -18,54 +18,6 @@ export const FACE_LANDMARKS = {
 const LEFT_EYE = [33, 133, 159, 145] as const;
 const RIGHT_EYE = [263, 362, 386, 374] as const;
 
-export interface Box {
-  dx: number;
-  dy: number;
-  dw: number;
-  dh: number;
-}
-
-/**
- * Compute the square destination box for the (square) NFT image so it frames
- * the user's whole head like a mask.
- *
- * Uses ear-to-ear width and forehead-to-chin height to find the face center
- * and scale, then fits a padded square around it. `sizeOffset` (-0.2..0.3)
- * lets the user fine-tune.
- */
-export function computeFaceBox(
-  landmarks: Landmark[],
-  canvasW: number,
-  canvasH: number,
-  sizeOffset: number
-): Box | null {
-  const L = landmarks[FACE_LANDMARKS.leftEar];
-  const R = landmarks[FACE_LANDMARKS.rightEar];
-  const T = landmarks[FACE_LANDMARKS.forehead];
-  const B = landmarks[FACE_LANDMARKS.chin];
-  if (!L || !R || !T || !B) return null;
-
-  const faceW = Math.abs(R.x - L.x) * canvasW;
-  const faceH = Math.abs(B.y - T.y) * canvasH;
-  const cx = ((L.x + R.x) / 2) * canvasW;
-  const cy = ((T.y + B.y) / 2) * canvasH;
-
-  // Pad the square around the head. 1.4x frames the face without swallowing the
-  // whole screen; the user can grow/shrink via sizeOffset (-0.5..0.5).
-  const base = Math.max(faceW, faceH);
-  const size = base * (1.4 + sizeOffset);
-
-  // Nudge slightly upward so the PFP's own face sits over the user's face.
-  const yShift = size * 0.06;
-
-  return {
-    dx: cx - size / 2,
-    dy: cy - size / 2 - yShift,
-    dw: size,
-    dh: size,
-  };
-}
-
 /** Placement metadata carried by a precomputed head mask (see MaskMeta). */
 export interface MaskPlacement {
   /** Face centre inside the mask square, normalized 0..1. */
@@ -75,59 +27,55 @@ export interface MaskPlacement {
   faceScale: number;
 }
 
-/** Base framing multiplier: how much wider than the live ear-to-ear face the
- *  mask's own face is drawn, so it comfortably covers the user's face. */
-const MASK_FRAMING_K = 1.15;
+/**
+ * Reject placement metadata that would produce a wildly mis-scaled or offset draw
+ * (a stale/corrupt record, or a token whose baked face geometry drifts far from
+ * the collection default). Returns a safe placement, or `null` so the caller
+ * falls back to the centered similarity transform used by every other collection.
+ *
+ * This is the guard that keeps a single bad Mad Lads record from rendering as a
+ * giant, offset, "3D-looking" mask: the anchor must sit inside the square and the
+ * faceScale must be a plausible fraction of it. The renderer only ever applies a
+ * 2D similarity transform, so bounding these inputs bounds the whole draw.
+ */
+export function sanitizePlacement(
+  placement: MaskPlacement | null | undefined
+): MaskPlacement | null {
+  if (!placement) return null;
+  const { anchorX, anchorY, faceScale } = placement;
+  if (![anchorX, anchorY, faceScale].every((v) => Number.isFinite(v))) return null;
+  // Anchor must be inside the square (with a little slack); faceScale must be a
+  // believable face fraction. Outside these, the metadata is not trustworthy.
+  if (anchorX < 0.1 || anchorX > 0.9) return null;
+  if (anchorY < 0.1 || anchorY > 0.95) return null;
+  if (faceScale < 0.12 || faceScale > 0.95) return null;
+  return { anchorX, anchorY, faceScale };
+}
+
+/**
+ * Coverage: draw the avatar slightly larger than the tracked face so its edge
+ * overhangs the user's real hairline instead of ending exactly at it. This is a
+ * RENDER-ONLY multiplier — it never touches the saved mask bitmap.
+ */
+export const BASE_COVERAGE_SCALE = 1.05; // +5% base overhang
+const ROLL_COVERAGE_START = 0.14; // rad (~8°) — no extra coverage below this
+const ROLL_COVERAGE_GAIN = 0.14; // extra coverage per rad of roll beyond start
+const ROLL_COVERAGE_MAX = 0.03; // hard cap: at most +3% from roll
+
+/**
+ * A tiny, capped extra coverage that grows with absolute head roll, so more of
+ * the real hairline is hidden exactly when a tilt would otherwise expose it.
+ * Derived from the ALREADY-SMOOTHED rotation so it can't pulse, and capped hard
+ * so the mask never visibly "breathes". Returns a factor close to 1.0.
+ */
+export function rollCoverageScale(rotation: number): number {
+  const over = Math.max(0, Math.abs(rotation) - ROLL_COVERAGE_START);
+  return 1 + Math.min(ROLL_COVERAGE_MAX, over * ROLL_COVERAGE_GAIN);
+}
+
 /** Fallback when a mask lacks a valid faceScale (Mad Lads: faceFrac 0.5 with
  *  0.1 padding → 0.5/(1+2*0.1) ≈ 0.42). */
 export const FACE_SCALE_FALLBACK = 0.42;
-
-/**
- * Square destination box for a PRECOMPUTED head mask. Unlike computeFaceBox
- * (which assumes a center-framed square PFP), the mask's face sits at
- * (anchorX, anchorY) inside the square and spans `faceScale` of its width, so we
- * scale the whole square until the mask's face matches the live face, then align
- * the anchor to the live face centre.
- *
- * Flip is intentionally NOT handled here — FaceMaskCanvas applies a single
- * geometric mirror at draw time, under which `dx = cx - anchorX*dw` stays
- * correct. `scale` from the manifest is already baked into the mask WebP and is
- * deliberately not re-applied.
- */
-export function computeMaskBox(
-  landmarks: Landmark[],
-  canvasW: number,
-  canvasH: number,
-  sizeOffset: number,
-  placement: MaskPlacement
-): Box | null {
-  const L = landmarks[FACE_LANDMARKS.leftEar];
-  const R = landmarks[FACE_LANDMARKS.rightEar];
-  const T = landmarks[FACE_LANDMARKS.forehead];
-  const B = landmarks[FACE_LANDMARKS.chin];
-  if (!L || !R || !T || !B) return null;
-
-  const faceW = Math.abs(R.x - L.x) * canvasW;
-  const cx = ((L.x + R.x) / 2) * canvasW;
-  const cy = ((T.y + B.y) / 2) * canvasH;
-
-  // Guard faceScale: never divide by zero / NaN / a tiny value that explodes dw.
-  const fs =
-    placement.faceScale && placement.faceScale > 0.05
-      ? placement.faceScale
-      : FACE_SCALE_FALLBACK;
-  // sizeOffset lets the user grow/shrink; clamp so the box can't invert or vanish.
-  const sizeMultiplier = Math.max(0.5, MASK_FRAMING_K + sizeOffset);
-
-  const dw = (faceW * sizeMultiplier) / fs;
-  const dh = dw;
-  return {
-    dx: cx - placement.anchorX * dw,
-    dy: cy - placement.anchorY * dw - dw * 0.06,
-    dw,
-    dh,
-  };
-}
 
 /** A full similarity transform for a precomputed head mask: where its facial
  *  anchor should sit (centre), how big to draw it (drawWidth), and the in-plane
@@ -140,10 +88,12 @@ export interface MaskTransform {
   faceW: number; // live ear-to-ear width (px) — for debug/clamps
 }
 
-/** Base framing multiplier and safe bounds for the live draw size. */
+/** Base framing multiplier and safe bounds for the live draw size. The max
+ *  admits the full expanded SIZE slider range (up to +150%) so users can wear
+ *  small-headed art (e.g. Mad Lads) much larger than the auto fit. */
 const MASK_TRACK_K = 1.15;
 const MASK_SIZE_MIN = 0.6;
-const MASK_SIZE_MAX = 2.4;
+const MASK_SIZE_MAX = 4.0;
 /** Small upward nudge (fraction of drawWidth) so the mask's eyes sit over the
  *  user's eyes; applied in the mask's LOCAL space so it rotates with the head. */
 export const MASK_UP_NUDGE = 0.06;
@@ -195,7 +145,94 @@ export function computeMaskTransform(
 
   const fs = placement.faceScale && placement.faceScale > 0.05 ? placement.faceScale : FACE_SCALE_FALLBACK;
   const mult = Math.max(MASK_SIZE_MIN, Math.min(MASK_SIZE_MAX, MASK_TRACK_K + sizeOffset));
-  const drawWidth = (faceW * mult) / fs;
+  // Bound the final size relative to the live face so no faceScale value — even a
+  // corrupt one that slipped past the guard — can produce a giant offset mask.
+  // 8× admits the expanded user size range while still capping corrupt metadata.
+  const drawWidth = clamp((faceW * mult) / fs, faceW * 1.2, faceW * 8);
+
+  return { centerX, centerY, drawWidth, rotation, faceW };
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/** The user's saved fit adjustments (see MaskFit in lib/userMasks). */
+export interface FitOffsets {
+  anchorOffsetX: number;
+  anchorOffsetY: number;
+  scaleOffset: number;
+}
+
+/**
+ * Apply the user's manual fit (left/right, up/down, scale) to a live transform.
+ *
+ * The offsets are rotated into the mask's LOCAL frame so a mask positioned at
+ * neutral stays rigidly attached when the head rolls. Previously they were
+ * added in screen space, which made the mask swing sideways under roll and
+ * expose the real face — worst for collections whose art needs manual offsets
+ * and enlargement (Mad Lads, DeGods), since the offset scales with drawWidth.
+ * At neutral roll (rotation ≈ 0) this is identical to the old behaviour, so
+ * the manual controls feel unchanged. Still a rigid 2D similarity transform:
+ * translation + uniform scale + roll only.
+ */
+export function applyMaskFit(t: MaskTransform, fit: FitOffsets): MaskTransform {
+  const drawWidth = t.drawWidth * Math.max(0.35, 1 + fit.scaleOffset);
+  const ox = fit.anchorOffsetX * drawWidth;
+  const oy = fit.anchorOffsetY * drawWidth;
+  const cos = Math.cos(t.rotation);
+  const sin = Math.sin(t.rotation);
+  return {
+    ...t,
+    drawWidth,
+    centerX: t.centerX + ox * cos - oy * sin,
+    centerY: t.centerY + ox * sin + oy * cos,
+  };
+}
+
+/** Base framing for a user-prepared mask whose face sits at the centre of the
+ *  square (no baked placement anchor). 1.4× padding around the ear/brow face box. */
+const CENTERED_FRAMING_K = 1.4;
+
+/**
+ * Live transform for a user-prepared mask (Keep full character / Customize),
+ * which has NO placement metadata — its subject is roughly centred in the square.
+ *
+ * Crucially this returns the SAME similarity-transform shape as
+ * computeMaskTransform so both paths share one smoothed, rotated draw:
+ * - width uses the Euclidean ear-to-ear (and forehead-chin) distance, so it is
+ *   ROTATION-INVARIANT — tilting the head no longer shrinks the mask;
+ * - rotation is the eye-line roll angle;
+ * - the mask is drawn around its own centre (anchor 0.5, 0.5).
+ */
+export function computeCenteredMaskTransform(
+  landmarks: Landmark[],
+  canvasW: number,
+  canvasH: number,
+  sizeOffset: number
+): MaskTransform | null {
+  const L = landmarks[FACE_LANDMARKS.leftEar];
+  const R = landmarks[FACE_LANDMARKS.rightEar];
+  const T = landmarks[FACE_LANDMARKS.forehead];
+  const B = landmarks[FACE_LANDMARKS.chin];
+  if (!L || !R || !T || !B) return null;
+
+  // Euclidean (roll-invariant) spans — never the raw axis deltas, which shrink
+  // as the face rotates in-plane.
+  const faceW = Math.hypot((R.x - L.x) * canvasW, (R.y - L.y) * canvasH);
+  const faceH = Math.hypot((B.x - T.x) * canvasW, (B.y - T.y) * canvasH);
+  const centerX = ((L.x + R.x) / 2) * canvasW;
+  const centerY = ((T.y + B.y) / 2) * canvasH;
+
+  let rotation = 0;
+  const eL = eyeCenter(landmarks, LEFT_EYE);
+  const eR = eyeCenter(landmarks, RIGHT_EYE);
+  if (eL && eR) {
+    const a = eL.x <= eR.x ? eL : eR;
+    const b = eL.x <= eR.x ? eR : eL;
+    rotation = Math.atan2((b.y - a.y) * canvasH, (b.x - a.x) * canvasW);
+  }
+
+  const base = Math.max(faceW, faceH);
+  const drawWidth = base * Math.max(0.5, CENTERED_FRAMING_K + sizeOffset);
 
   return { centerX, centerY, drawWidth, rotation, faceW };
 }

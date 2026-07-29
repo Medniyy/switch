@@ -32,6 +32,8 @@ export interface OverlayHandlers {
   onResize?: (id: string, xPhoto: number, yPhoto: number) => void;
   /** Pinch-scale an overlay by a multiplicative factor (two fingers on a monke). */
   onScale?: (id: string, factor: number) => void;
+  /** Twist an overlay by a rotation delta in radians (two fingers on a monke). */
+  onRotate?: (id: string, deltaRad: number) => void;
   /** A tap (down+up without dragging) on an overlay. */
   onTap?: (id: string) => void;
 }
@@ -86,6 +88,7 @@ export function usePinchZoom(
     last: { x: number; y: number };
     lastMid: { x: number; y: number };
     lastDist: number;
+    lastAngle: number;
     overlayId: string | null;
     lastPhoto: { x: number; y: number };
     downScreen: { x: number; y: number };
@@ -95,6 +98,7 @@ export function usePinchZoom(
     last: { x: 0, y: 0 },
     lastMid: { x: 0, y: 0 },
     lastDist: 0,
+    lastAngle: 0,
     overlayId: null,
     lastPhoto: { x: 0, y: 0 },
     downScreen: { x: 0, y: 0 },
@@ -140,6 +144,13 @@ export function usePinchZoom(
   };
 
   const onPointerDown = useCallback((e: ReactPointerEvent) => {
+    // A press on a real control overlaid on the stage (the Home button, links,
+    // inputs) belongs to that control. Capturing the pointer here retargets the
+    // subsequent click to the container and silently swallows it — which is
+    // exactly how the editor's Home button stopped working.
+    const el = e.target as Element | null;
+    if (el?.closest?.("a,button,input,select,textarea")) return;
+
     const cur = g.current;
 
     // A mouse has exactly one active pointer. Wipe any leftover gesture state and
@@ -186,6 +197,7 @@ export function usePinchZoom(
       const [a, b] = [...pointers.current.values()];
       cur.lastMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
       cur.lastDist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      cur.lastAngle = Math.atan2(b.y - a.y, b.x - a.x);
       // If the gesture is on a monke — the first finger was already holding one,
       // or the second finger landed on one — the pinch RESIZES that monke and the
       // photo is frozen. Otherwise the pinch zooms/reframes the photo.
@@ -227,12 +239,19 @@ export function usePinchZoom(
     const cur = g.current;
 
     if (cur.mode === "pinch-monke" && pts.length >= 2 && cur.overlayId) {
-      // Two fingers on a monke: scale it by the change in finger distance. The
-      // photo transform is left untouched, so it stays exactly where it is.
+      // Two fingers on a monke: scale it by the change in finger distance and
+      // rotate it by the twist of the finger line. The photo transform is left
+      // untouched, so it stays exactly where it is.
       const [a, b] = pts;
       const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
       const ratio = dist / (cur.lastDist || dist);
       overlayRef.current.onScale?.(cur.overlayId, ratio);
+      const angle = Math.atan2(b.y - a.y, b.x - a.x);
+      let delta = angle - cur.lastAngle;
+      if (delta > Math.PI) delta -= 2 * Math.PI;
+      if (delta < -Math.PI) delta += 2 * Math.PI;
+      if (delta) overlayRef.current.onRotate?.(cur.overlayId, delta);
+      cur.lastAngle = angle;
       cur.lastDist = dist;
       return;
     }

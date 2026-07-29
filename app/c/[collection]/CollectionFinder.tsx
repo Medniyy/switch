@@ -117,8 +117,8 @@ export function CollectionFinder() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto px-4 md:px-8 py-4 md:py-12 flex flex-col gap-5 md:gap-10">
-      <header className="flex flex-col gap-3">
+    <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 md:px-8 py-3 md:py-12 landscape:py-2">
+      <header className="flex shrink-0 flex-col gap-2 md:gap-3">
         <Link
           href="/"
           className="inline-flex items-center gap-2 text-cream/50 hover:text-banana transition-colors font-[family-name:var(--font-display)] text-[10px] w-fit"
@@ -127,18 +127,23 @@ export function CollectionFinder() {
           COLLECTIONS
         </Link>
         <div className="text-center md:text-left">
-          <h1 className="font-[family-name:var(--font-display)] text-banana text-2xl md:text-4xl leading-tight">
+          <h1 className="font-[family-name:var(--font-display)] text-banana text-xl md:text-4xl leading-tight">
             {meta.name}
           </h1>
-          <p className="text-cream/60 text-xl mt-2">
+          <p className="text-cream/60 text-base md:text-xl mt-1 md:mt-2 landscape:hidden md:landscape:block">
             Type your number. Wear it. Snap it.
           </p>
         </div>
       </header>
 
-      <div className="flex flex-col items-center gap-4 md:gap-6">
-        {/* Desktop: text input */}
-        <div className="hidden md:block w-full max-w-sm">
+      {/* The number/search/keypad composition. On portrait mobile it flex-fills
+          and centres inside the usable region (below the header, above the tab
+          bar) for balanced spacing; desktop keeps its top-aligned layout. */}
+      <div className="flex flex-1 flex-col justify-center gap-3 min-h-0 md:mt-10 md:flex-none md:justify-start md:gap-10 landscape:gap-2">
+
+      {/* Desktop: text input + search */}
+      <div className="hidden md:flex flex-col items-center gap-6">
+        <div className="w-full max-w-sm">
           <SearchBar
             value={query}
             onChange={setQuery}
@@ -146,14 +151,21 @@ export function CollectionFinder() {
             maxDigits={MAX_DIGITS}
           />
         </div>
+        <SearchButton onClick={runSearch} disabled={!query} className="max-w-sm" />
+      </div>
 
-        {/* Mobile: big display + numpad */}
-        <div className="md:hidden w-full flex flex-col items-center gap-4">
-          <div className="pixel-border bg-screen w-full max-w-xs text-center py-2">
-            <span className="font-[family-name:var(--font-body)] text-5xl text-cream">
+      {/* Mobile finder: a vertical stack in portrait; a two-column layout in short
+          landscape (display + search beside the keypad) so nothing scrolls off. */}
+      <div className="md:hidden flex flex-col items-center gap-3 max-md:landscape:flex-row max-md:landscape:items-center max-md:landscape:justify-center max-md:landscape:gap-6">
+        <div className="w-full max-w-xs flex flex-col items-center gap-3 max-md:landscape:order-2 max-md:landscape:w-52">
+          <div className="pixel-border bg-screen w-full text-center py-1.5 landscape:py-1">
+            <span className="font-[family-name:var(--font-body)] text-4xl landscape:text-3xl text-cream">
               {query || <span className="text-cream/30">0000</span>}
             </span>
           </div>
+          <SearchButton onClick={runSearch} disabled={!query} className="max-w-xs" />
+        </div>
+        <div className="w-full max-w-xs max-md:landscape:order-1 max-md:landscape:w-52">
           <NumberPad
             onDigit={(d) =>
               setQuery((q) =>
@@ -164,21 +176,6 @@ export function CollectionFinder() {
             onClear={() => setQuery("")}
           />
         </div>
-
-        <button
-          type="button"
-          onClick={runSearch}
-          disabled={!query}
-          className="
-            w-full max-w-xs md:max-w-sm pixel-border bg-banana text-screen
-            font-[family-name:var(--font-display)] text-sm py-3
-            disabled:opacity-40 disabled:pointer-events-none
-            active:translate-x-[4px] active:translate-y-[4px] active:shadow-none
-            transition-transform duration-75
-          "
-        >
-          SEARCH
-        </button>
       </div>
 
       {/* Result */}
@@ -193,6 +190,7 @@ export function CollectionFinder() {
           <NFTPreviewCard nft={result} onUse={() => handleUse(result)} />
         )}
       </div>
+      </div>
 
       {gallery.length > 0 && (
         <NFTGrid
@@ -203,5 +201,33 @@ export function CollectionFinder() {
         />
       )}
     </div>
+  );
+}
+
+function SearchButton({
+  onClick,
+  disabled,
+  className = "",
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`
+        w-full pixel-border bg-banana text-screen
+        font-[family-name:var(--font-display)] text-sm py-2.5 landscape:py-2
+        disabled:opacity-40 disabled:pointer-events-none
+        active:translate-x-[4px] active:translate-y-[4px] active:shadow-none
+        transition-transform duration-75
+        ${className}
+      `}
+    >
+      SEARCH
+    </button>
   );
 }

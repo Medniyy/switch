@@ -92,21 +92,33 @@ export function CollectionCarousel({
   }, [emblaApi, onScroll]);
 
   return (
-    <div className="overflow-hidden cursor-grab active:cursor-grabbing" ref={emblaRef}>
-      <div className="flex touch-pan-y items-center py-4">
+    // `container-type: size` makes the card sizeable from the REAL available box
+    // (cqw/cqh below), so the square card fits height AND width and is never
+    // vertically cropped. overflow-hidden only clips the horizontal side-peek.
+    <div
+      className="h-full w-full overflow-hidden cursor-grab active:cursor-grabbing [container-type:size]"
+      ref={emblaRef}
+    >
+      <div className="flex h-full touch-pan-y items-center">
         {collections.map((c, i) => {
           const t = tween[i] ?? 0;
           const scale = 0.86 + t * 0.14;
           const opacity = 0.5 + t * 0.5;
           return (
+            // Slide sizes to its card (width auto) so the peek is symmetric; the
+            // card width is min(width-budget, height-budget) → always square, never
+            // clipped. Height budget reserves ~3.25rem for the name-tag + gap.
             <div
               key={c.id}
-              className="min-w-0 flex-[0_0_78%] sm:flex-[0_0_42%] lg:flex-[0_0_29%] px-2 md:px-3"
+              className="flex h-full shrink-0 items-center justify-center px-2 md:px-3"
             >
               {/* No CSS transition here on purpose — the tween updates every scroll
                   frame, so the scale tracks the drag 1:1 (a transition would lag
                   behind and feel rubbery). */}
-              <div style={{ transform: `scale(${scale})`, opacity }}>
+              <div
+                style={{ transform: `scale(${scale})`, opacity }}
+                className="w-[min(78cqw,calc(100cqh_-_3.25rem))] sm:w-[min(42cqw,calc(100cqh_-_3.25rem))] lg:w-[min(29cqw,calc(100cqh_-_3.25rem))]"
+              >
                 <CollectionCard collection={c} index={i} />
               </div>
             </div>

@@ -9,9 +9,11 @@ import { fetchJSON } from "./_util";
 export interface DasAsset {
   id: string;
   content?: {
-    metadata?: { name?: string };
+    /** `json_name` is the off-chain name; some collections leave the on-chain
+     *  `name` blank on a subset of assets and only fill in `json_name`. */
+    metadata?: { name?: string; json_name?: string };
     links?: { image?: string };
-    files?: { uri?: string; cdn_uri?: string }[];
+    files?: { uri?: string; cdn_uri?: string; mime?: string }[];
   };
   grouping?: { group_key: string; group_value: string }[];
 }
@@ -32,13 +34,27 @@ export async function rpc<T>(method: string, params: unknown): Promise<T> {
   return res.result;
 }
 
+/** Mime types we can wear directly — one decoded frame, no animation. */
+const STILL_IMAGE = /^image\/(png|jpe?g|webp)$/i;
+
 export function imageOf(a: DasAsset): string | null {
-  return (
-    a.content?.links?.image ??
-    a.content?.files?.[0]?.cdn_uri ??
-    a.content?.files?.[0]?.uri ??
-    null
-  );
+  const files = a.content?.files ?? [];
+  // Prefer a still raster whenever the collection ships one alongside an
+  // animated original: the canvas pipeline only ever draws a single frame, and
+  // some collections (Sensei) point `links.image` at a 30MB+ GIF that would be
+  // downloaded in full on a phone for nothing.
+  const image = a.content?.links?.image;
+  if (image && /\.gif(\?|$)/i.test(image)) {
+    const still = files.find((f) => f.mime && STILL_IMAGE.test(f.mime));
+    if (still?.uri || still?.cdn_uri) return still.uri ?? still.cdn_uri ?? null;
+  }
+  return image ?? files[0]?.cdn_uri ?? files[0]?.uri ?? null;
+}
+
+/** The asset's display name — falls back to the off-chain `json_name`. */
+export function nameOf(a: DasAsset): string | null {
+  const m = a.content?.metadata;
+  return m?.name || m?.json_name || null;
 }
 
 /** Resolve the on-chain collection address from a Magic Eden symbol. */

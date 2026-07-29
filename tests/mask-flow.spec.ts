@@ -55,7 +55,16 @@ async function canvasBox(page: Page) {
 }
 
 async function pickBrush(page: Page, size: "small" | "medium" | "large") {
+  // Desktop dock exposes the preset chips inline; the mobile toolbar hides them
+  // behind a brush-size bottom sheet.
+  const direct = page.getByRole("button", { name: size, exact: true });
+  if ((await direct.count()) > 0 && (await direct.first().isVisible())) {
+    await direct.first().click();
+    return;
+  }
+  await page.getByRole("button", { name: /^Brush ·/ }).click();
   await page.getByRole("button", { name: size, exact: true }).click();
+  await page.getByRole("button", { name: "Done" }).click();
 }
 
 async function pickTool(page: Page, tool: "Erase" | "Restore") {
@@ -99,7 +108,7 @@ test("first-time journey: choice → keep full → reload → reset → customiz
   expect(rec!.tokenId).toBe(String(NFT_A.id));
   expect(rec!.hasBlob).toBe(true);
   expect(rec!.blobSize).toBeGreaterThan(0);
-  expect(rec!.version).toBe(1);
+  expect(rec!.version).toBe(2); // current USER_MASK_VERSION (placement validated)
   expect(rec!.maskFlip).toBe(false);
   expect(typeof rec!.updatedAt).toBe("number");
 
@@ -141,9 +150,14 @@ test("first-time journey: choice → keep full → reload → reset → customiz
 
   // 12–13: undo multiple, redo multiple. Build 3 distinct strokes.
   await pickBrush(page, "large");
+  // Map image coords → canvas CSS coords accounting for the centred, letterboxed
+  // fit (the canvas is not necessarily square).
+  const fitScale = Math.min(box.width, box.height) / 300;
+  const imgLeft = box.width / 2 - 150 * fitScale;
+  const imgTop = box.height / 2 - 150 * fitScale;
   const toScreen = (ix: number, iy: number) => ({
-    sx: (ix / 300) * box.width,
-    sy: (iy / 300) * box.height,
+    sx: imgLeft + ix * fitScale,
+    sy: imgTop + iy * fitScale,
   });
   for (const [ix, iy] of [
     [75, 75],

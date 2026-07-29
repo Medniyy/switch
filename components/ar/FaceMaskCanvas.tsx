@@ -3,14 +3,35 @@
 import { RefObject, useEffect, useRef } from "react";
 import { FaceLandmarker } from "@mediapipe/tasks-vision";
 import {
-  computeFaceBox,
+  applyMaskFit,
+  BASE_COVERAGE_SCALE,
+  computeCenteredMaskTransform,
   computeMaskTransform,
   MASK_UP_NUDGE,
+  rollCoverageScale,
+  sanitizePlacement,
   type MaskPlacement,
   type MaskTransform,
 } from "@/lib/imageUtils";
 import type { MaskFit } from "@/lib/userMasks";
+import { BananaField } from "@/lib/bananaRain";
 import { useAppStore, VIDEO_QUALITY } from "@/store/useAppStore";
+
+/** The mask draw of the most recent live frame, in CANVAS pixel space (pre-
+ *  mirror). Lets the photo shutter seed the editor with the PFP exactly where
+ *  it sat on the face. Cleared when the face has been lost for a while. */
+export interface LiveMaskTrack {
+  centerX: number;
+  centerY: number;
+  /** Final drawn square width (smoothed, coverage included). */
+  drawWidth: number;
+  rotation: number; // radians, in-plane roll
+  /** The facial anchor the draw was placed around (0.5/0.5 for user masks). */
+  anchorX: number;
+  anchorY: number;
+  canvasW: number;
+  canvasH: number;
+}
 
 interface FaceMaskCanvasProps {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -22,6 +43,9 @@ interface FaceMaskCanvasProps {
   placement?: MaskPlacement | null;
   maskFlip?: boolean;
   fit?: MaskFit;
+  /** Written every frame with the latest mask draw (see LiveMaskTrack). Must be
+   *  a stable ref — the render loop captures it once. */
+  trackRef?: RefObject<LiveMaskTrack | null>;
   onFaceChange?: (detected: boolean) => void;
   className?: string;
 }
@@ -65,6 +89,7 @@ export function FaceMaskCanvas({
   placement = null,
   maskFlip = false,
   fit = { anchorOffsetX: 0, anchorOffsetY: 0, scaleOffset: 0 },
+  trackRef,
   onFaceChange,
   className = "",
 }: FaceMaskCanvasProps) {
@@ -73,12 +98,16 @@ export function FaceMaskCanvas({
   const videoQuality = useAppStore((s) => s.videoQuality);
   const cameraMirror = useAppStore((s) => s.cameraMirror);
   const debugTracking = useAppStore((s) => s.debugTracking);
+  const bananaRain = useAppStore((s) => s.bananaRain);
   const maskRef = useRef(mask);
   const qualityRef = useRef(videoQuality);
   const cameraMirrorRef = useRef(cameraMirror);
   const maskFlipRef = useRef(maskFlip);
   const fitRef = useRef(fit);
   const debugRef = useRef(debugTracking);
+  const bananaRainRef = useRef(bananaRain);
+  const bananaFieldRef = useRef<BananaField | null>(null);
+  const lastFrameRef = useRef(0);
   const nftRef = useRef(nftImage);
   const placementRef = useRef(placement);
   const faceRef = useRef<boolean | null>(null);
@@ -98,8 +127,30 @@ export function FaceMaskCanvas({
   useEffect(() => { maskFlipRef.current = maskFlip; }, [maskFlip]);
   useEffect(() => { fitRef.current = fit; }, [fit]);
   useEffect(() => { debugRef.current = debugTracking; }, [debugTracking]);
+  useEffect(() => {
+    bananaRainRef.current = bananaRain;
+    // Re-seed a full-height scatter each time the effect is switched on.
+    if (bananaRain) bananaFieldRef.current?.reset();
+  }, [bananaRain]);
   useEffect(() => { nftRef.current = nftImage; }, [nftImage]);
   useEffect(() => { placementRef.current = placement; }, [placement]);
+
+  // Dev/test-only seam: expose the pure tracking-transform functions so tests can
+  // feed synthetic landmarks and verify head-roll rotation + rotation-invariant
+  // scale without a live camera. Stripped from production bundles.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    (
+      window as unknown as { __switchMath?: unknown }
+    ).__switchMath = {
+      computeMaskTransform,
+      computeCenteredMaskTransform,
+      sanitizePlacement,
+      rollCoverageScale,
+      applyMaskFit,
+      BASE_COVERAGE_SCALE,
+    };
+  }, []);
 
   // Dev-only: toggle the tracking debug overlay with "d".
   useEffect(() => {
@@ -171,7 +222,11 @@ export function FaceMaskCanvas({
       if (nftRef.current !== lastNftRef.current) { smoothRef.current = null; lastNftRef.current = nftRef.current; }
       if (lastDimRef.current.w !== w || lastDimRef.current.h !== h) { smoothRef.current = null; lastDimRef.current = { w, h }; }
       if (detected) lastSeenRef.current = now;
-      else if (now - lastSeenRef.current > FACE_GRACE_MS) { smoothRef.current = null; rawRef.current = null; }
+      else if (now - lastSeenRef.current > FACE_GRACE_MS) {
+        smoothRef.current = null;
+        rawRef.current = null;
+        if (trackRef) trackRef.current = null; // stale placement — don't seed captures with it
+      }
 
       ctx.save();
       if (cameraMirror) {
@@ -180,44 +235,67 @@ export function FaceMaskCanvas({
       }
       ctx.drawImage(video, 0, 0, w, h);
 
+      // Banana Rain (MonkeyDAO): a decorative OVERLAY (not a background replace —
+      // the app has no live person segmentation). Drawn OVER the camera frame but
+      // UNDER the avatar mask so it never covers the wearer's face. Runs only
+      // while enabled; time-stepped so fall speed is frame-rate stable.
+      if (bananaRainRef.current) {
+        if (!bananaFieldRef.current) bananaFieldRef.current = new BananaField();
+        const dt = lastFrameRef.current ? now - lastFrameRef.current : 16;
+        bananaFieldRef.current.update(dt, w, h);
+        bananaFieldRef.current.draw(ctx);
+      }
+      lastFrameRef.current = now;
+
       const img = nftRef.current;
       let smoothed: SmoothState | null = null;
       if (landmarks && img && img.complete && img.naturalWidth > 0) {
         ctx.globalAlpha = opacity;
         ctx.globalCompositeOperation = blend;
-        if (p) {
-          // Precomputed head mask: similarity transform (centre + scale + roll),
-          // smoothed, drawn AROUND the mask's internal facial anchor. Flip is the
-          // single geometric mirror above — the rotation stays correct under it.
-          const raw = computeMaskTransform(landmarks, w, h, sizeOffset, p);
-          if (raw) {
-            raw.drawWidth *= Math.max(0.35, 1 + fit.scaleOffset);
-            raw.centerX += fit.anchorOffsetX * raw.drawWidth;
-            raw.centerY += fit.anchorOffsetY * raw.drawWidth;
-            rawRef.current = raw;
-            smoothed = smooth(smoothRef, raw, now);
-            const dw = smoothed.drawWidth;
-            ctx.save();
-            ctx.translate(smoothed.centerX, smoothed.centerY);
-            ctx.rotate(smoothed.rotation);
-            if (maskFlip) ctx.scale(-1, 1);
-            ctx.drawImage(img, -p.anchorX * dw, -(p.anchorY + MASK_UP_NUDGE) * dw, dw, dw);
-            ctx.restore();
-          }
-        } else {
-          // Legacy centered PFP (unsupported collections) — unchanged, no rotation.
-          const box = computeFaceBox(landmarks, w, h, sizeOffset);
-          if (box) {
-            const scale = Math.max(0.35, 1 + fit.scaleOffset);
-            const dw = box.dw * scale;
-            const dh = box.dh * scale;
-            const cx = box.dx + box.dw / 2 + fit.anchorOffsetX * dw;
-            const cy = box.dy + box.dh / 2 + fit.anchorOffsetY * dw;
-            ctx.save();
-            ctx.translate(cx, cy);
-            if (maskFlip) ctx.scale(-1, 1);
-            ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
-            ctx.restore();
+        // Both a precomputed head mask (has placement) and a user-prepared mask
+        // (centred, no placement) resolve to the SAME similarity transform
+        // (centre + scale + roll) and share one smoothed, rotated draw. The mask
+        // is drawn AROUND its facial anchor: the baked (anchorX,anchorY) for a
+        // precomputed mask, or the square centre (0.5,0.5) for a user mask. Flip
+        // is the single geometric mirror above — rotation stays correct under it.
+        // Sanitize the placement: a corrupt/implausible anchor or faceScale drops
+        // to the centered similarity transform every other collection uses, so a
+        // single bad record can never render as a giant, offset, "3D-looking" mask.
+        const sp = sanitizePlacement(p);
+        const anchorX = sp ? sp.anchorX : 0.5;
+        const anchorY = sp ? sp.anchorY : 0.5;
+        const base = sp
+          ? computeMaskTransform(landmarks, w, h, sizeOffset, sp)
+          : computeCenteredMaskTransform(landmarks, w, h, sizeOffset);
+        if (base) {
+          // Manual fit offsets ride in the mask's LOCAL frame (rotated with the
+          // head) so a positioned/enlarged mask stays attached during roll.
+          const raw = applyMaskFit(base, fit);
+          rawRef.current = raw;
+          smoothed = smooth(smoothRef, raw, now);
+          // Coverage (render-only): a small base overhang plus a tiny, capped
+          // roll-dependent bump so the avatar hides the real hairline without ever
+          // visibly shrinking or breathing. Derived from the smoothed rotation.
+          const coverage =
+            BASE_COVERAGE_SCALE * rollCoverageScale(smoothed.rotation);
+          const dw = smoothed.drawWidth * coverage;
+          ctx.save();
+          ctx.translate(smoothed.centerX, smoothed.centerY);
+          ctx.rotate(smoothed.rotation);
+          if (maskFlip) ctx.scale(-1, 1);
+          ctx.drawImage(img, -anchorX * dw, -(anchorY + MASK_UP_NUDGE) * dw, dw, dw);
+          ctx.restore();
+          if (trackRef) {
+            trackRef.current = {
+              centerX: smoothed.centerX,
+              centerY: smoothed.centerY,
+              drawWidth: dw,
+              rotation: smoothed.rotation,
+              anchorX,
+              anchorY,
+              canvasW: w,
+              canvasH: h,
+            };
           }
         }
         ctx.globalAlpha = 1;

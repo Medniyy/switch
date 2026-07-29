@@ -76,7 +76,7 @@ export function writeData(id: string, data: Record<string, unknown>): void {
 }
 
 /** Pull the token number out of an NFT name, e.g. "Mad Lad #1234" → 1234. */
-export function numberFromName(name: string | undefined): number | null {
+export function numberFromName(name: string | null | undefined): number | null {
   if (!name) return null;
   const hash = name.match(/#\s*(\d+)/);
   if (hash) return Number(hash[1]);

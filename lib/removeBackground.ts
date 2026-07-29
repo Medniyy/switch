@@ -1,16 +1,25 @@
 /**
  * Background removal for PFPs — a zero-dependency chroma-key cutout.
  *
- * SMB monkeys (and most PFPs) sit on a flat, solid-colour background. Rather
- * than shipping a ~40MB ML segmentation model — a non-starter for the mobile
- * WebView build — we exploit that flatness: sample the corners to learn the
- * background colour, then *flood-fill inward from the edges*, clearing only the
- * pixels that match AND are connected to the border.
+ * SMB monkeys (and most PFPs) sit on a flat or gently-graded solid backdrop.
+ * Rather than shipping a ~40MB ML segmentation model — a non-starter for the
+ * mobile WebView build — we exploit that: sample the corners AND the edge
+ * midpoints to learn the background palette (a gradient reads as several
+ * related colours, e.g. Mad Lads' textured paper backdrops), then *flood-fill
+ * inward from the edges*, clearing only the pixels that match one of those
+ * reference colours AND are connected to the border.
  *
  * The flood-fill is the important part. A naive "make every pixel near the
  * background colour transparent" would punch holes through a monkey whose fur
  * happens to match the backdrop. By only clearing pixels reachable from the
  * edge, an interior region of the same colour is left untouched.
+ *
+ * Two safety rails keep busy art from being mangled:
+ *  - a reference patch that no other patch corroborates (e.g. a hat poking into
+ *    one corner) is dropped, so subject colours never key;
+ *  - if too few border pixels match the surviving references, the background is
+ *    not flat enough to key and we bail (`null`) so the caller keeps the
+ *    original image.
  *
  * Edges are feathered with a soft threshold band so the cutout doesn't look
  * like it was cut with scissors.
@@ -72,12 +81,25 @@ function samplePatch(
   return [r / count, g / count, b / count];
 }
 
-function dist(data: Uint8ClampedArray, i: number, c: RGB): number {
-  const dr = data[i] - c[0];
-  const dg = data[i + 1] - c[1];
-  const db = data[i + 2] - c[2];
-  return Math.sqrt(dr * dr + dg * dg + db * db);
+/** Squared RGB distance from pixel `i` to its NEAREST reference colour. Squared
+ *  (no sqrt) because it runs for every flood-filled pixel × every reference. */
+function minDist2(data: Uint8ClampedArray, i: number, refs: RGB[]): number {
+  let best = Infinity;
+  for (const c of refs) {
+    const dr = data[i] - c[0];
+    const dg = data[i + 1] - c[1];
+    const db = data[i + 2] - c[2];
+    const d2 = dr * dr + dg * dg + db * db;
+    if (d2 < best) best = d2;
+  }
+  return best;
 }
+
+/** Minimum fraction of border pixels that must match the background palette;
+ *  below this the backdrop is treated as busy/photographic and we don't key.
+ *  Kept permissive because PFP characters routinely cover the whole bottom
+ *  edge and much of the sides. */
+const MIN_BORDER_MATCH = 0.35;
 
 /**
  * Returns a new canvas with the background knocked out, or `null` if the
@@ -116,67 +138,87 @@ export function removeBackground(
   }
   const data = imageData.data;
 
-  // Estimate background colour from the four corners.
+  // Learn the background palette from the four corners plus the four edge
+  // midpoints, so a graded backdrop (each region a different shade) still keys.
   const n = Math.min(cornerSample, Math.floor(Math.min(w, h) / 2));
-  const corners: RGB[] = [
+  if (n < 1) return null;
+  const midX = Math.floor((w - n) / 2);
+  const midY = Math.floor((h - n) / 2);
+  const candidates: RGB[] = [
     samplePatch(data, w, 0, 0, n),
     samplePatch(data, w, w - n, 0, n),
     samplePatch(data, w, 0, h - n, n),
     samplePatch(data, w, w - n, h - n, n),
-  ];
-  const bg: RGB = [
-    (corners[0][0] + corners[1][0] + corners[2][0] + corners[3][0]) / 4,
-    (corners[0][1] + corners[1][1] + corners[2][1] + corners[3][1]) / 4,
-    (corners[0][2] + corners[1][2] + corners[2][2] + corners[3][2]) / 4,
+    samplePatch(data, w, midX, 0, n),
+    samplePatch(data, w, midX, h - n, n),
+    samplePatch(data, w, 0, midY, n),
+    samplePatch(data, w, w - n, midY, n),
   ];
 
   const hard = tolerance * MAX_DIST;
   const soft = (tolerance + softness) * MAX_DIST;
+  const hard2 = hard * hard;
+  const soft2 = soft * soft;
 
-  // Bail if the corners disagree wildly — likely a patterned / busy background
-  // that chroma-keying would mangle. Let the caller keep the original.
-  const cornerSpread = Math.max(...corners.map((c) => dist3(c, bg)));
-  if (cornerSpread > soft) return null;
+  // A reference nobody else corroborates is probably the SUBJECT poking into
+  // that patch (a hat in a corner) — drop it so we never key subject colours.
+  // On a flat/gently-graded backdrop, neighbouring patches agree WELL within
+  // the hard threshold. Corroboration is deliberately tighter than `soft`: a
+  // 50/50 seam mix between two distinct areas sits ~half their separation from
+  // each parent, which can sneak under `soft` and would wrongly validate
+  // subject colours (multi-panel art) as background.
+  const refs = candidates.filter((c, i) =>
+    candidates.some((o, j) => j !== i && dist3(c, o) <= hard)
+  );
+  if (refs.length === 0) return null;
 
   // Flood fill from the border. `state`: 0 = unvisited, 1 = queued/cleared.
+  // While seeding, also measure how much of the border matches the palette —
+  // too little means a busy/photographic backdrop that keying would mangle.
   const state = new Uint8Array(w * h);
   const stack: number[] = [];
+  let borderMatch = 0;
+  let borderTotal = 0;
 
   const pushEdge = (px: number, py: number) => {
     const p = py * w + px;
-    if (state[p]) return;
-    if (dist(data, p * 4, bg) <= soft) {
-      state[p] = 1;
-      stack.push(p);
+    borderTotal++;
+    if (minDist2(data, p * 4, refs) <= soft2) {
+      borderMatch++;
+      if (!state[p]) {
+        state[p] = 1;
+        stack.push(p);
+      }
     }
   };
   for (let x = 0; x < w; x++) {
     pushEdge(x, 0);
     pushEdge(x, h - 1);
   }
-  for (let y = 0; y < h; y++) {
+  for (let y = 1; y < h - 1; y++) {
     pushEdge(0, y);
     pushEdge(w - 1, y);
   }
+  if (borderMatch / borderTotal < MIN_BORDER_MATCH) return null;
 
   while (stack.length) {
     const p = stack.pop()!;
     const i = p * 4;
-    const d = dist(data, i, bg);
+    const d2 = minDist2(data, i, refs);
 
-    if (d <= hard) {
+    if (d2 <= hard2) {
       // Solid background — clear it and keep flooding outward.
       data[i + 3] = 0;
       const x = p % w;
       const y = (p / w) | 0;
-      if (x > 0) tryPush(state, stack, data, p - 1, soft, bg);
-      if (x < w - 1) tryPush(state, stack, data, p + 1, soft, bg);
-      if (y > 0) tryPush(state, stack, data, p - w, soft, bg);
-      if (y < h - 1) tryPush(state, stack, data, p + w, soft, bg);
+      if (x > 0) tryPush(state, stack, data, p - 1, soft2, refs);
+      if (x < w - 1) tryPush(state, stack, data, p + 1, soft2, refs);
+      if (y > 0) tryPush(state, stack, data, p - w, soft2, refs);
+      if (y < h - 1) tryPush(state, stack, data, p + w, soft2, refs);
     } else {
       // Feather band — partially transparent, but don't flood past it so we
       // don't eat into the subject. alpha 0 at `hard`, full at `soft`.
-      const t = (d - hard) / (soft - hard);
+      const t = (Math.sqrt(d2) - hard) / (soft - hard);
       data[i + 3] = Math.round(255 * t);
     }
   }
@@ -238,11 +280,11 @@ function tryPush(
   stack: number[],
   data: Uint8ClampedArray,
   p: number,
-  soft: number,
-  bg: RGB
+  soft2: number,
+  refs: RGB[]
 ) {
   if (state[p]) return;
-  if (dist(data, p * 4, bg) <= soft) {
+  if (minDist2(data, p * 4, refs) <= soft2) {
     state[p] = 1;
     stack.push(p);
   }

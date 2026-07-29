@@ -36,6 +36,7 @@ export interface PlacedMonke {
   size: number;
   cutout: HTMLImageElement | null;
   flip?: boolean; // mirror horizontally
+  rot?: number; // rotation about the monke's own centre (radians)
 }
 
 /**
@@ -154,11 +155,16 @@ const OUTPUT_LONG_EDGE = 1440;
  * (`bg`) so the output matches what's on screen. WYSIWYG, identical on mobile
  * (pinch) and desktop (wheel/drag).
  */
+/** Fixed seed so the static banana scatter is identical in the editor preview
+ *  and the exported image (WYSIWYG). */
+export const BANANA_SCATTER_SEED = 7;
+
 export async function compositeFramed(
   base: CapturedPhoto,
   monkes: PlacedMonke[],
   view: ViewFrame,
-  bg = "#0c2a18"
+  bg = "#0c2a18",
+  bananas = false
 ): Promise<PhotoResult> {
   // Scale the CSS-px viewport up to the output resolution.
   const k = OUTPUT_LONG_EDGE / Math.max(view.w, view.h);
@@ -181,22 +187,34 @@ export async function compositeFramed(
   const sl = (len: number) => len * scale * k;
 
   ctx.drawImage(base.canvas, sx(0), sy(0), sl(base.w), sl(base.h));
+
+  // Banana Rain (MonkeyDAO): a static scatter in photo space, BEHIND the monkes,
+  // rendered with the same seed as the editor preview so export is WYSIWYG.
+  if (bananas) {
+    const tmp = document.createElement("canvas");
+    tmp.width = base.w;
+    tmp.height = base.h;
+    const tctx = tmp.getContext("2d");
+    if (tctx) {
+      const { drawBananaScatter } = await import("./bananaRain");
+      drawBananaScatter(tctx, base.w, base.h, 16, BANANA_SCATTER_SEED);
+      ctx.drawImage(tmp, sx(0), sy(0), sl(base.w), sl(base.h));
+    }
+  }
+
   for (const m of monkes) {
     const img = m.cutout;
     if (!img || !img.complete || img.naturalWidth === 0) continue;
-    const x = sx(m.cx - m.size / 2);
-    const y = sy(m.cy - m.size / 2);
     const len = sl(m.size);
-    if (m.flip) {
-      // Mirror horizontally about the monke's own center.
-      ctx.save();
-      ctx.translate(x + len, y);
-      ctx.scale(-1, 1);
-      ctx.drawImage(img, 0, 0, len, len);
-      ctx.restore();
-    } else {
-      ctx.drawImage(img, x, y, len, len);
-    }
+    // Rotate/mirror about the monke's own centre — the same order as the
+    // editor's CSS (`rotate` on the box, `scaleX(-1)` on the image inside it)
+    // so the export matches the preview exactly.
+    ctx.save();
+    ctx.translate(sx(m.cx), sy(m.cy));
+    if (m.rot) ctx.rotate(m.rot);
+    if (m.flip) ctx.scale(-1, 1);
+    ctx.drawImage(img, -len / 2, -len / 2, len, len);
+    ctx.restore();
   }
 
   const blob = await new Promise<Blob | null>((resolve) =>

@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Play } from "lucide-react";
+import { Camera, Play } from "lucide-react";
 import { VISIBLE_COLLECTIONS } from "@/lib/collections";
 import { getLastMaskKey } from "@/lib/userMasks";
+import { useLockBodyScroll } from "@/lib/useLockBodyScroll";
 import { BrandWordmark } from "@/components/ui/BrandLogo";
 import { CollectionCarousel } from "@/components/gallery/CollectionCarousel";
 import { WelcomeScreen } from "@/components/gallery/WelcomeScreen";
@@ -21,10 +22,18 @@ export default function Home() {
   const router = useRouter();
   const [entered, setEntered] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
+  // Whether the user has a previously-worn PFP to jump back into. We surface this
+  // as an explicit "Resume" action instead of AUTO-redirecting to /record — the
+  // old auto-redirect made Home unreachable once any mask was saved, trapping
+  // "Choose another PFP" in a redirect loop.
+  const [hasResume, setHasResume] = useState(false);
+
+  // Home is a single fixed viewport (no document scroll during the experience).
+  useLockBodyScroll(true);
 
   useEffect(() => {
-    if (getLastMaskKey()) router.replace("/record");
-  }, [router]);
+    setHasResume(!!getLastMaskKey());
+  }, []);
 
   const enter = () => {
     setEntered(true);
@@ -47,7 +56,7 @@ export default function Home() {
   if (!entered) return <WelcomeScreen onEnter={enter} />;
 
   return (
-    <main className="relative min-h-dvh flex flex-col power-on">
+    <main className="relative flex h-[100dvh] flex-col overflow-hidden power-on">
       {/* Top bar: wordmark doubles as a "back to home" control */}
       <header className="flex items-center justify-between px-4 md:px-8 pt-[max(1rem,env(safe-area-inset-top))] pb-2">
         <button
@@ -57,6 +66,15 @@ export default function Home() {
         >
           <BrandWordmark />
         </button>
+        {hasResume && (
+          <button
+            onClick={() => router.push("/record")}
+            className="flex items-center gap-2 rounded-full border border-banana/45 bg-banana/10 px-4 py-2 font-[family-name:var(--font-display)] text-[11px] text-banana transition-colors hover:bg-banana/20 active:scale-[0.98]"
+          >
+            <Camera size={14} strokeWidth={2.5} />
+            Resume
+          </button>
+        )}
       </header>
 
       {/* Heading — centered, matching the welcome screen's premium hierarchy */}

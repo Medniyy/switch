@@ -16,25 +16,25 @@ export function WelcomeScreen({ onEnter }: { onEnter: () => void }) {
   const [howOpen, setHowOpen] = useState(false);
 
   return (
-    <main className="relative min-h-dvh flex flex-col overflow-hidden">
-      {/* Brand lockup — centered, full size */}
-      <div className="pt-[max(4.5rem,env(safe-area-inset-top))] md:pt-24 flex flex-col items-center px-6 text-center">
+    <main className="relative h-[100dvh] flex flex-col overflow-hidden">
+      {/* Brand lockup — centered, full size (compacted on short/landscape). */}
+      <div className="pt-[max(4.5rem,env(safe-area-inset-top))] md:pt-24 short:pt-3 flex flex-col items-center px-6 text-center">
         <div className="power-on flex items-center gap-3.5">
           <BrandLogo size={54} />
-          <span className="font-[family-name:var(--font-display)] font-semibold tracking-[0.2em] text-cream text-4xl md:text-6xl">
+          <span className="font-[family-name:var(--font-display)] font-semibold tracking-[0.2em] text-cream text-4xl md:text-6xl short:text-2xl">
             SWITCH
           </span>
         </div>
 
         {/* Headline — the main line, two rows */}
-        <h1 className="mt-8 font-[family-name:var(--font-display)] font-medium text-cream text-2xl md:text-4xl leading-[1.15] max-w-[22rem] md:max-w-2xl">
+        <h1 className="mt-8 short:mt-2 font-[family-name:var(--font-display)] font-medium text-cream text-2xl md:text-4xl short:text-lg leading-[1.15] max-w-[22rem] md:max-w-2xl">
           Rep the <span className="text-banana">culture</span>.
           <br />
           Wear it live.
         </h1>
 
-        {/* "How does it work?" — clean, minimal info dropdown under the headline */}
-        <div className="mt-6 w-full max-w-[22rem] md:max-w-md">
+        {/* "How does it work?" — hidden on short/landscape to give the carousel room. */}
+        <div className="mt-6 w-full max-w-[22rem] md:max-w-md short:hidden">
           <button
             onClick={() => setHowOpen((v) => !v)}
             aria-expanded={howOpen}
@@ -72,19 +72,22 @@ export function WelcomeScreen({ onEnter }: { onEnter: () => void }) {
         </div>
       </div>
 
-      {/* Animated collection carousel — the hero content, fills the middle */}
-      <div className="flex-1 flex flex-col justify-center py-4 md:py-6 min-h-0">
+      {/* Animated collection carousel — the hero content, fills the middle. The
+          card is sized from the ACTUAL available height (container-query units in
+          the carousel) so it shrinks to fit instead of being vertically cropped;
+          overflow-hidden here only clips the horizontal side-peek. */}
+      <div className="flex-1 min-h-0 overflow-hidden py-2 md:py-4">
         <CollectionCarousel collections={VISIBLE_COLLECTIONS} autoplay />
       </div>
 
       {/* Enter — large primary CTA, clear of the footer links */}
-      <div className="pb-[max(2.5rem,env(safe-area-inset-bottom))] flex flex-col items-center gap-4">
+      <div className="pb-[max(2.5rem,env(safe-area-inset-bottom))] short:pb-3 flex flex-col items-center gap-4 short:gap-2">
         <button
           onClick={onEnter}
           className="
             group flex items-center gap-2 rounded-full bg-banana text-screen
             font-[family-name:var(--font-display)] font-medium text-base
-            px-9 py-4 lime-glow active:scale-[0.97]
+            px-9 py-4 short:py-2.5 lime-glow active:scale-[0.97]
             transition-transform duration-150
           "
         >

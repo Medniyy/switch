@@ -1,7 +1,14 @@
 import type { NFT } from "@/lib/types";
-import type { MaskPlacement } from "@/lib/imageUtils";
+import { sanitizePlacement, type MaskPlacement } from "@/lib/imageUtils";
 
-export const USER_MASK_VERSION = 1;
+/**
+ * v2 (2026-07-13): placement metadata is now validated. Records written before
+ * this are migrated in place on load — their edited bitmap, mask mode, flip and
+ * fit offsets are preserved; only implausible/obsolete placement is dropped (so a
+ * bad Mad Lads placement self-heals to the safe centered transform without the
+ * user having to press "Start this PFP over"). See `migrateRecord`.
+ */
+export const USER_MASK_VERSION = 2;
 
 const DB_NAME = "switch-user-masks";
 const DB_VERSION = 1;
@@ -107,12 +114,38 @@ async function withStore<T>(
   });
 }
 
+/**
+ * Bring an older record up to the current schema, or return null if it is
+ * unusable (no bitmap) or from a NEWER app version we can't understand. The
+ * user's edited bitmap and creative choices are always preserved; only invalid
+ * placement metadata is sanitized away.
+ */
+export function migrateRecord(record: SavedUserMask | undefined | null): SavedUserMask | null {
+  if (!record || !record.editedMaskBlob) return null;
+  const v = record.version ?? 0;
+  if (v > USER_MASK_VERSION) return null; // written by a newer build — don't guess
+  if (v === USER_MASK_VERSION) return record;
+  // v < current: migrate in place, keeping everything the user made.
+  return {
+    ...record,
+    placement: sanitizePlacement(record.placement),
+    version: USER_MASK_VERSION,
+  };
+}
+
 export async function loadSavedMask(key: string): Promise<SavedUserMask | null> {
   const record = await withStore<SavedUserMask>("readonly", (store) => store.get(key));
-  if (!record || record.version !== USER_MASK_VERSION || !record.editedMaskBlob) {
-    return null;
+  const migrated = migrateRecord(record);
+  if (!migrated) return null;
+  // Persist the upgrade (best-effort, no side effects) so it only runs once. A
+  // direct put — not saveUserMask — so migrating on load can't change the
+  // "last selected" pointer or onboarding flags.
+  if (record && (record.version ?? 0) < USER_MASK_VERSION) {
+    void withStore("readwrite", (store) => store.put(migrated)).catch(() => {
+      /* render already uses the migrated value; storage upgrade can retry later */
+    });
   }
-  return record;
+  return migrated;
 }
 
 export async function saveUserMask(record: SavedUserMask): Promise<void> {

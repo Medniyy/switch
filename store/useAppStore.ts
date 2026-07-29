@@ -6,7 +6,7 @@ export type MaskShape = "round" | "square";
 
 export interface MaskSettings {
   opacity: number; // 0..1
-  sizeOffset: number; // -0.5 .. 0.5 (fraction added to the auto-fit scale)
+  sizeOffset: number; // -0.3 .. 1.5 (fraction added to the auto-fit scale)
   blend: BlendMode;
   shape: MaskShape; // round (default) softens the sharp square PFP corners
   removeBg: boolean; // chroma-key the PFP's flat background away
@@ -40,6 +40,10 @@ interface AppState {
   /** Dev-only live-tracking debug overlay (toggle with "d" in the recorder). Not
    *  part of MaskSettings so it never persists or affects capture output. */
   debugTracking: boolean;
+  /** MonkeyDAO-only "Banana Rain" effect. Session-only (not persisted); reset
+   *  whenever the selected NFT changes so it can't linger onto a non-MonkeyDAO
+   *  collection. Read inside the render loop via a ref (no per-frame React state). */
+  bananaRain: boolean;
   setSelectedNFT: (nft: NFT | null) => void;
   setMask: (patch: Partial<MaskSettings>) => void;
   resetMask: () => void;
@@ -49,6 +53,7 @@ interface AppState {
   setCameraFacing: (f: CameraFacing) => void;
   setCameraMirror: (on: boolean) => void;
   setDebugTracking: (on: boolean) => void;
+  setBananaRain: (on: boolean) => void;
 }
 
 const DEFAULT_MASK: MaskSettings = {
@@ -68,7 +73,10 @@ export const useAppStore = create<AppState>((set) => ({
   cameraFacing: "user",
   cameraMirror: true,
   debugTracking: false,
-  setSelectedNFT: (nft) => set({ selectedNFT: nft }),
+  bananaRain: false,
+  // Selecting a different PFP always clears Banana Rain — it must never carry from
+  // a MonkeyDAO token onto a collection that isn't allowed to show it.
+  setSelectedNFT: (nft) => set({ selectedNFT: nft, bananaRain: false }),
   setMask: (patch) => set((s) => ({ mask: { ...s.mask, ...patch } })),
   resetMask: () => set({ mask: DEFAULT_MASK }),
   setAudioEnabled: (on) => set({ audioEnabled: on }),
@@ -77,6 +85,7 @@ export const useAppStore = create<AppState>((set) => ({
   setCameraFacing: (f) => set({ cameraFacing: f }),
   setCameraMirror: (on) => set({ cameraMirror: on }),
   setDebugTracking: (on) => set({ debugTracking: on }),
+  setBananaRain: (on) => set({ bananaRain: on }),
 }));
 
 // Dev/test-only seam: expose the store so end-to-end tests can inject a

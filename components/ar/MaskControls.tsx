@@ -25,12 +25,14 @@ export function MaskSettings() {
         value={mask.opacity}
         onChange={(v) => setMask({ opacity: v })}
       />
+      {/* Wide range so any collection's mask can be worn far larger (or smaller)
+          than the auto fit — see MASK_SIZE_MAX in lib/imageUtils. */}
       <Slider
         label={`SIZE · ${mask.sizeOffset >= 0 ? "+" : ""}${Math.round(
           mask.sizeOffset * 100
         )}%`}
-        min={-0.2}
-        max={0.5}
+        min={-0.3}
+        max={1.5}
         step={0.01}
         value={mask.sizeOffset}
         onChange={(v) => setMask({ sizeOffset: v })}

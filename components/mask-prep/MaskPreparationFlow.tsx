@@ -1,16 +1,23 @@
 "use client";
 
 import {
+  ArrowLeft,
   Check,
+  Circle,
   Eraser,
+  Eye,
   FlipHorizontal2,
+  Home as HomeIcon,
   Paintbrush,
+  Palette,
   Redo2,
   RotateCcw,
+  SlidersHorizontal,
   Sparkles,
   Undo2,
   UserRound,
   Wand2,
+  X,
 } from "lucide-react";
 import {
   useCallback,
@@ -30,6 +37,7 @@ import {
   loadImage,
   nftMaskKey,
   saveUserMask,
+  USER_MASK_VERSION,
   type MaskFit,
   type MaskMode,
   type SavedUserMask,
@@ -38,6 +46,7 @@ import { useHeadMask } from "@/components/ar/useHeadMask";
 import { useNFTImage } from "@/components/ar/useNFTImage";
 import { FaceMaskCanvas } from "@/components/ar/FaceMaskCanvas";
 import { PixelButton } from "@/components/ui/PixelButton";
+import { useIsDesktop } from "@/lib/useMediaQuery";
 
 type PrepTool = "erase" | "restore";
 type BrushPreset = "small" | "medium" | "large";
@@ -59,6 +68,18 @@ interface MaskPreparationFlowProps {
   canvasRef: RefObject<HTMLCanvasElement | null>;
   onComplete: (mask: PreparedRuntimeMask) => void;
   onChooseAnother: () => void;
+  /** Skip the "Keep full / Customize" choice and open the editor straight away.
+   *  Used when the caller (e.g. the uploaded-photo flow) already made the choice. */
+  skipChoiceToEditor?: boolean;
+  /** Show the live-camera preview panels. Off in contexts with no live camera
+   *  (the uploaded-photo editor) so the editor doesn't show a black preview. */
+  livePreview?: boolean;
+  /** Wording for the "Choose another PFP" affordance; the photo flow overrides it
+   *  to "Cancel" since it returns to a composition rather than the gallery. */
+  backLabel?: string;
+  /** When set, a Home button is shown in the header (embedded photo-flow use) so
+   *  the user can leave for the Home screen without first cancelling the edit. */
+  onHome?: () => void;
 }
 
 interface StartingMaskState {
@@ -95,6 +116,46 @@ const MIN_BRUSH = 0.014;
 const MAX_BRUSH = 0.2;
 const MAX_UNDO = 18;
 
+/** Editor PREVIEW backdrop only — helps inspect very dark or very light mask
+ *  details. Never drawn into the mask bitmap or the export (those stay
+ *  transparent); remembered for the session, never stored with the NFT mask. */
+type PreviewBg = "dark-checker" | "light-checker" | "gray" | "light" | "dark";
+const PREVIEW_BG_ORDER: PreviewBg[] = [
+  "dark-checker",
+  "light-checker",
+  "gray",
+  "light",
+  "dark",
+];
+const PREVIEW_BG_LABEL: Record<PreviewBg, string> = {
+  "dark-checker": "Dark checkerboard",
+  "light-checker": "Light checkerboard",
+  gray: "Neutral gray",
+  light: "Solid light",
+  dark: "Solid dark",
+};
+const PREVIEW_BG_SESSION_KEY = "switch:maskEditorPreviewBg";
+
+function readSessionPreviewBg(): PreviewBg {
+  try {
+    if (typeof window === "undefined") return "dark-checker";
+    const v = window.sessionStorage.getItem(PREVIEW_BG_SESSION_KEY);
+    return PREVIEW_BG_ORDER.includes(v as PreviewBg)
+      ? (v as PreviewBg)
+      : "dark-checker";
+  } catch {
+    return "dark-checker";
+  }
+}
+
+function rememberSessionPreviewBg(bg: PreviewBg) {
+  try {
+    window.sessionStorage.setItem(PREVIEW_BG_SESSION_KEY, bg);
+  } catch {
+    /* session preference is best-effort */
+  }
+}
+
 export function MaskPreparationFlow({
   nft,
   existingRecord,
@@ -104,13 +165,18 @@ export function MaskPreparationFlow({
   canvasRef,
   onComplete,
   onChooseAnother,
+  skipChoiceToEditor = false,
+  livePreview = true,
+  backLabel = "Choose another PFP",
+  onHome,
 }: MaskPreparationFlowProps) {
   const starting = useStartingMask(nft, existingRecord, existingImage);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
   // First time on this device we ask "keep the whole character or adjust it?".
-  // Coming back in via "Edit mask" (existing record) jumps straight to editing.
+  // Coming back in via "Edit mask" (existing record) — or when the caller already
+  // made the choice (skipChoiceToEditor) — jumps straight to editing.
   const [stage, setStage] = useState<"choose" | "edit">(
-    existingRecord ? "edit" : "choose"
+    existingRecord || skipChoiceToEditor ? "edit" : "choose"
   );
 
   const complete = useCallback(
@@ -133,7 +199,7 @@ export function MaskPreparationFlow({
         placement: starting.placement,
         createdAt: existingRecord?.createdAt ?? now,
         updatedAt: now,
-        version: 1,
+        version: USER_MASK_VERSION,
       };
 
       try {
@@ -175,7 +241,7 @@ export function MaskPreparationFlow({
 
   if (starting.status === "error") {
     return (
-      <PrepShell nft={nft} onChooseAnother={onChooseAnother}>
+      <PrepShell nft={nft} onChooseAnother={onChooseAnother} backLabel={backLabel} onHome={onHome}>
         <div className="flex min-h-[55dvh] flex-col items-center justify-center gap-4 px-6 text-center">
           <p className="font-[family-name:var(--font-display)] text-sm text-pixelred">
             ARTWORK COULD NOT LOAD
@@ -190,7 +256,7 @@ export function MaskPreparationFlow({
   }
 
   return (
-    <PrepShell nft={nft} onChooseAnother={onChooseAnother}>
+    <PrepShell nft={nft} onChooseAnother={onChooseAnother} backLabel={backLabel} onHome={onHome}>
       {starting.status !== "ready" || !starting.seedImage ? (
         <div className="flex min-h-[55dvh] flex-col items-center justify-center gap-4 text-center">
           <div className="h-16 w-16 rounded-full border border-banana/50 border-t-banana animate-spin" />
@@ -245,6 +311,7 @@ export function MaskPreparationFlow({
               videoRef={videoRef}
               landmarkerRef={landmarkerRef}
               canvasRef={canvasRef}
+              livePreview={livePreview}
               onComplete={complete}
             />
           )}
@@ -258,67 +325,62 @@ function PrepShell({
   nft,
   onChooseAnother,
   children,
+  backLabel = "Choose another PFP",
+  onHome,
 }: {
   nft: NFT;
   onChooseAnother: () => void;
   children: React.ReactNode;
+  backLabel?: string;
+  onHome?: () => void;
 }) {
   return (
-    <div className="min-h-dvh bg-screen text-cream">
-      <div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:px-6 md:py-6">
-        <header className="shrink-0">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="font-[family-name:var(--font-display)] text-[10px] text-cream/45">
-                PREPARE YOUR MASK
-              </p>
-              <h1 className="font-[family-name:var(--font-display)] text-3xl leading-none text-banana md:text-5xl">
-                Make it yours
-              </h1>
-            </div>
-            <button
-              onClick={onChooseAnother}
-              className="rounded-full border border-cream/15 bg-white/5 px-4 py-2 text-sm text-cream/70 transition-colors hover:text-cream"
-            >
-              Choose another PFP
-            </button>
-          </div>
-
-          <div className="mt-4 grid grid-cols-3 gap-2">
-            {["Collection", "Your PFP", "Make it yours"].map((label, index) => (
-              <div
-                key={label}
-                className={`rounded-full border px-3 py-2 text-center font-[family-name:var(--font-display)] text-[9px] ${
-                  index === 2
-                    ? "border-banana bg-banana text-screen"
-                    : "border-cream/10 bg-white/5 text-cream/55"
-                }`}
-              >
-                {index + 1}. {label}
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-4 flex items-center gap-3 rounded-[20px] border border-cream/10 bg-grid/70 p-3">
+    <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-screen text-cream">
+      <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-3 pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(0.5rem,env(safe-area-inset-bottom))] md:px-6 md:pb-4 md:pt-4">
+        {/* Compact, single-row header so the canvas gets the vertical space. */}
+        <header className="flex shrink-0 items-center justify-between gap-3 pb-2 md:pb-3">
+          <div className="flex min-w-0 items-center gap-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={nft.image}
               alt={nft.name}
-              className="h-14 w-14 rounded-2xl object-cover"
+              className="h-10 w-10 shrink-0 rounded-xl object-cover md:h-12 md:w-12"
               crossOrigin="anonymous"
             />
             <div className="min-w-0">
-              <p className="truncate font-[family-name:var(--font-display)] text-sm text-cream">
-                {nft.name}
+              <p className="font-[family-name:var(--font-display)] text-[9px] uppercase tracking-wide text-cream/45">
+                Prepare your mask
               </p>
-              <p className="mt-1 text-sm leading-snug text-cream/55">
-                Erase anything you don&apos;t want and keep the parts you love — hair, hats, ears, accessories, as much of the character as you like.
+              <p className="truncate font-[family-name:var(--font-display)] text-sm text-cream md:text-lg">
+                {nft.name}
               </p>
             </div>
           </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {onHome && (
+              <button
+                onClick={onHome}
+                aria-label="Home"
+                title="Home"
+                className="flex h-11 w-11 items-center justify-center rounded-full border border-cream/15 bg-white/5 text-cream/75 transition-colors hover:text-cream active:scale-95"
+              >
+                <HomeIcon size={16} strokeWidth={2.5} />
+              </button>
+            )}
+            <button
+              onClick={onChooseAnother}
+              className="flex h-11 shrink-0 items-center gap-1.5 rounded-full border border-cream/15 bg-white/5 px-3 text-xs text-cream/75 transition-colors hover:text-cream active:scale-95 md:px-4 md:text-sm"
+            >
+              <ArrowLeft size={15} strokeWidth={2.5} />
+              <span className="hidden sm:inline">{backLabel}</span>
+              <span className="sm:hidden">
+                {backLabel === "Choose another PFP" ? "Back" : backLabel}
+              </span>
+            </button>
+          </div>
         </header>
 
-        <main className="mt-4 min-h-0 flex-1">{children}</main>
+        <main className="min-h-0 flex-1">{children}</main>
       </div>
     </div>
   );
@@ -482,9 +544,9 @@ function MaskChoice({
   };
 
   return (
-    <div className="grid h-full min-h-0 items-center gap-5 desktop:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
-      <div className="mx-auto w-full max-w-sm">
-        <div className="relative aspect-[3/4] overflow-hidden rounded-[24px] border border-cream/10 bg-screen">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto pb-1 desktop:grid desktop:grid-cols-[minmax(0,420px)_minmax(0,1fr)] desktop:items-center desktop:gap-6 desktop:overflow-hidden">
+      <div className="mx-auto w-full max-w-[320px] shrink-0 desktop:max-w-sm">
+        <div className="relative mx-auto h-[36dvh] max-h-[360px] overflow-hidden rounded-[24px] border border-cream/10 bg-screen desktop:aspect-[3/4] desktop:h-auto desktop:max-h-none">
           <FaceMaskCanvas
             videoRef={videoRef}
             landmarkerRef={landmarkerRef}
@@ -501,15 +563,15 @@ function MaskChoice({
         </div>
       </div>
 
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-3 desktop:gap-4">
         <div>
           <p className="font-[family-name:var(--font-display)] text-[10px] text-banana">
             YOUR PFP IS READY
           </p>
-          <h2 className="mt-1 font-[family-name:var(--font-display)] text-2xl leading-tight text-cream md:text-3xl">
+          <h2 className="mt-1 font-[family-name:var(--font-display)] text-xl leading-tight text-cream md:text-3xl">
             Keep the whole character, or customize it?
           </h2>
-          <p className="mt-2 max-w-md text-lg leading-snug text-cream/55">
+          <p className="mt-1.5 max-w-md text-base leading-snug text-cream/55 md:text-lg">
             Either way looks great. You can always change your mind later.
           </p>
         </div>
@@ -601,6 +663,7 @@ function MaskPrepEditor({
   videoRef,
   landmarkerRef,
   canvasRef,
+  livePreview = true,
   onComplete,
 }: {
   seedImage: HTMLImageElement;
@@ -612,6 +675,7 @@ function MaskPrepEditor({
   videoRef: RefObject<HTMLVideoElement | null>;
   landmarkerRef: RefObject<FaceLandmarker | null>;
   canvasRef: RefObject<HTMLCanvasElement | null>;
+  livePreview?: boolean;
   onComplete: (payload: EditorCompletePayload) => Promise<void> | void;
 }) {
   const visibleCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -650,6 +714,21 @@ function MaskPrepEditor({
   const [message, setMessage] = useState<string | null>(null);
   const [viewVersion, setViewVersion] = useState(0);
   const [imageSide, setImageSide] = useState(512);
+  const [previewBg, setPreviewBg] = useState<PreviewBg>(readSessionPreviewBg);
+  const isDesktop = useIsDesktop();
+
+  const cyclePreviewBg = () => {
+    const next =
+      PREVIEW_BG_ORDER[
+        (PREVIEW_BG_ORDER.indexOf(previewBg) + 1) % PREVIEW_BG_ORDER.length
+      ];
+    setPreviewBg(next);
+    rememberSessionPreviewBg(next);
+  };
+  // Mobile-only transient panels: a brush-size sheet and a "more" sheet (fit +
+  // reset + flip), plus a live-camera preview overlay. Desktop shows these inline.
+  const [mobileSheet, setMobileSheet] = useState<"none" | "brush" | "more">("none");
+  const [previewing, setPreviewing] = useState(false);
 
   const brushRadius = useMemo(() => {
     return Math.max(4, brushRatio * imageSide);
@@ -707,7 +786,7 @@ function MaskPrepEditor({
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, rect.width, rect.height);
-    drawChecker(ctx, rect.width, rect.height);
+    drawPreviewBg(ctx, rect.width, rect.height, previewBg);
 
     const t = transformRef.current;
     t.viewW = rect.width;
@@ -742,7 +821,7 @@ function MaskPrepEditor({
       ctx.stroke();
       ctx.restore();
     }
-  }, [brushRadius, cursor, maskFlip, tool]);
+  }, [brushRadius, cursor, maskFlip, previewBg, tool]);
 
   useEffect(() => {
     render();
@@ -795,6 +874,15 @@ function MaskPrepEditor({
   const setPreset = (preset: BrushPreset) => {
     setBrushPreset(preset);
     setBrushRatio(BRUSH_PRESETS[preset]);
+  };
+
+  // Free brush slider that also keeps the preset chips in sync.
+  const changeBrushRatio = (value: number) => {
+    setBrushRatio(value);
+    const matched = Object.entries(BRUSH_PRESETS).find(
+      ([, ratio]) => Math.abs(ratio - value) < 0.002
+    );
+    if (matched) setBrushPreset(matched[0] as BrushPreset);
   };
 
   const resetTransform = () => {
@@ -1102,10 +1190,14 @@ function MaskPrepEditor({
         ? "Editing your saved mask"
         : "Starting from your PFP";
 
+  const canUndo = historyCount > 0;
+  const canRedo = redoCount > 0;
+
   return (
-    <div className="grid h-full min-h-0 gap-4 desktop:grid-cols-[minmax(0,1fr)_320px]">
-      <section className="flex min-h-0 flex-col gap-3">
-        <div className="relative min-h-[45dvh] flex-1 overflow-hidden rounded-[24px] border border-cream/10 bg-[#1b1e24]">
+    <div className="flex h-full min-h-0 flex-col gap-2 desktop:flex-row desktop:gap-4">
+      {/* MAIN column — the canvas gets every spare pixel. */}
+      <section className="flex min-h-0 flex-1 flex-col gap-2">
+        <div className="relative min-h-0 flex-1 overflow-hidden rounded-[20px] border border-cream/10 bg-[#1b1e24]">
           <canvas
             ref={visibleCanvasRef}
             onPointerDown={onPointerDown}
@@ -1115,124 +1207,210 @@ function MaskPrepEditor({
             onPointerLeave={() => setCursor(null)}
             onWheel={onWheel}
             className="h-full w-full touch-none select-none"
+            style={{ touchAction: "none" }}
             aria-label="Mask editor canvas"
           />
           {hintVisible && (
             <div className="pointer-events-none absolute inset-x-4 top-4 flex justify-center">
               <span className="rounded-full border border-banana/35 bg-screen/75 px-4 py-2 font-[family-name:var(--font-display)] text-[10px] text-banana backdrop-blur">
-                Swipe to erase
+                One finger paints · two fingers zoom &amp; pan
               </span>
             </div>
           )}
-          <button
-            onClick={resetTransform}
-            className="absolute bottom-3 right-3 rounded-full border border-cream/15 bg-screen/75 px-3 py-2 text-sm text-cream/70 backdrop-blur active:scale-95"
-          >
-            Center
-          </button>
+          <div className="absolute bottom-3 right-3 flex items-center gap-2">
+            {/* Preview-only backdrop cycle — inspect light or dark mask details.
+                Never touches the mask bitmap or the export. */}
+            <button
+              onClick={cyclePreviewBg}
+              aria-label="Preview background"
+              title={`Preview background: ${PREVIEW_BG_LABEL[previewBg]} (tap to change)`}
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-cream/15 bg-screen/75 text-cream/70 backdrop-blur active:scale-95"
+            >
+              <Palette size={15} strokeWidth={2.5} />
+            </button>
+            <button
+              onClick={resetTransform}
+              className="rounded-full border border-cream/15 bg-screen/75 px-3 py-2 text-xs text-cream/70 backdrop-blur active:scale-95"
+            >
+              Center
+            </button>
+          </div>
+
+          {/* Mobile: live-camera preview overlaid on the same stage. */}
+          {!isDesktop && previewing && livePreview && (
+            <div className="absolute inset-0 z-30 bg-screen">
+              <FaceMaskCanvas
+                videoRef={videoRef}
+                landmarkerRef={landmarkerRef}
+                canvasRef={canvasRef}
+                nftImage={previewImage}
+                placement={placement}
+                maskFlip={maskFlip}
+                fit={fit}
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+              <span className="pointer-events-none absolute left-3 top-3 rounded-full border border-banana/35 bg-screen/70 px-3 py-1.5 font-[family-name:var(--font-display)] text-[9px] text-banana backdrop-blur">
+                LIVE PREVIEW
+              </span>
+              <button
+                onClick={() => setPreviewing(false)}
+                className="absolute right-3 top-3 flex h-11 items-center gap-1.5 rounded-full border border-cream/25 bg-screen/70 px-4 text-sm text-cream backdrop-blur active:scale-95"
+              >
+                <Check size={16} strokeWidth={2.5} />
+                Back to editing
+              </button>
+            </div>
+          )}
         </div>
 
-        <ToolDock
-          tool={tool}
-          setTool={setTool}
+        {/* Desktop tool dock lives under the canvas; mobile uses the bottom bar. */}
+        {isDesktop && (
+          <ToolDock
+            tool={tool}
+            setTool={setTool}
+            brushPreset={brushPreset}
+            setPreset={setPreset}
+            brushRatio={brushRatio}
+            setBrushRatio={changeBrushRatio}
+            canUndo={canUndo}
+            undo={undo}
+            canRedo={canRedo}
+            redo={redo}
+            reset={reset}
+            maskFlip={maskFlip}
+            toggleFlip={() => setMaskFlip((v) => !v)}
+          />
+        )}
+
+        {!isDesktop && (
+          <MobileToolbar
+            tool={tool}
+            setTool={setTool}
+            brushRatio={brushRatio}
+            imageSide={imageSide}
+            canUndo={canUndo}
+            undo={undo}
+            canRedo={canRedo}
+            redo={redo}
+            previewing={previewing}
+            showPreview={livePreview}
+            onTogglePreview={() => setPreviewing((v) => !v)}
+            onOpenBrush={() => setMobileSheet("brush")}
+            onOpenMore={() => setMobileSheet("more")}
+            onSave={complete}
+            saving={saving}
+            message={message}
+          />
+        )}
+      </section>
+
+      {/* Desktop aside — persistent live preview + fine fit + save. */}
+      {isDesktop && (
+        <aside className="flex min-h-0 w-[340px] shrink-0 flex-col gap-3">
+          {livePreview && (
+            <div className="rounded-[20px] border border-cream/10 bg-grid/80 p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="font-[family-name:var(--font-display)] text-[10px] text-banana">
+                  Live preview
+                </p>
+                <p className="truncate text-xs text-cream/45">{sourceLabel}</p>
+              </div>
+              <div className="relative aspect-[3/4] overflow-hidden rounded-[16px] bg-screen">
+                <FaceMaskCanvas
+                  videoRef={videoRef}
+                  landmarkerRef={landmarkerRef}
+                  canvasRef={canvasRef}
+                  nftImage={previewImage}
+                  placement={placement}
+                  maskFlip={maskFlip}
+                  fit={fit}
+                  className="absolute inset-0 h-full w-full object-cover"
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-[20px] border border-cream/10 bg-grid/80 p-3">
+            <p className="font-[family-name:var(--font-display)] text-[10px] text-cream/50">
+              Fit
+            </p>
+            <FitSlider
+              label="Left / right"
+              value={fit.anchorOffsetX}
+              min={-0.24}
+              max={0.24}
+              step={0.005}
+              onChange={(anchorOffsetX) => updateFit({ anchorOffsetX })}
+            />
+            <FitSlider
+              label="Up / down"
+              value={fit.anchorOffsetY}
+              min={-0.24}
+              max={0.24}
+              step={0.005}
+              onChange={(anchorOffsetY) => updateFit({ anchorOffsetY })}
+            />
+            {/* Wide scale range so small-headed art (e.g. Mad Lads) can be worn
+                much larger; fine 0.005 steps keep it precise at normal sizes. */}
+            <FitSlider
+              label="Scale"
+              value={fit.scaleOffset}
+              min={-0.5}
+              max={2}
+              step={0.005}
+              onChange={(scaleOffset) => updateFit({ scaleOffset })}
+            />
+            <button
+              onClick={resetFit}
+              className="mt-2 w-full rounded-full border border-cream/15 bg-white/5 py-2 font-[family-name:var(--font-display)] text-[10px] text-cream/65 transition-colors hover:border-cream/30 hover:text-cream/85"
+            >
+              Reset fit
+            </button>
+          </div>
+
+          <div className="mt-auto flex flex-col gap-2">
+            {message && (
+              <p className="rounded-full border border-pixelred/35 bg-pixelred/10 px-3 py-2 text-center text-sm text-pixelred">
+                {message}
+              </p>
+            )}
+            <PixelButton
+              onClick={complete}
+              size="lg"
+              disabled={saving}
+              className="min-h-14 w-full"
+            >
+              <Check size={18} strokeWidth={3} />
+              {saving ? "Saving..." : "Looks good"}
+            </PixelButton>
+            <p className="text-center text-sm leading-snug text-cream/45">
+              Do this once. We will remember it on this device.
+            </p>
+          </div>
+        </aside>
+      )}
+
+      {/* Mobile transient sheets */}
+      {!isDesktop && mobileSheet === "brush" && (
+        <BrushSheet
           brushPreset={brushPreset}
           setPreset={setPreset}
           brushRatio={brushRatio}
-          setBrushRatio={(value) => {
-            setBrushRatio(value);
-            const matched = Object.entries(BRUSH_PRESETS).find(
-              ([, ratio]) => Math.abs(ratio - value) < 0.002
-            );
-            if (matched) setBrushPreset(matched[0] as BrushPreset);
-          }}
-          canUndo={historyCount > 0}
-          undo={undo}
-          canRedo={redoCount > 0}
-          redo={redo}
+          setBrushRatio={changeBrushRatio}
+          onClose={() => setMobileSheet("none")}
+        />
+      )}
+      {!isDesktop && mobileSheet === "more" && (
+        <MoreSheet
+          fit={fit}
+          updateFit={updateFit}
+          resetFit={resetFit}
           reset={reset}
           maskFlip={maskFlip}
           toggleFlip={() => setMaskFlip((v) => !v)}
+          onClose={() => setMobileSheet("none")}
         />
-      </section>
-
-      <aside className="flex min-h-0 flex-col gap-3">
-        <div className="rounded-[24px] border border-cream/10 bg-grid/80 p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <p className="font-[family-name:var(--font-display)] text-[10px] text-banana">
-              Live preview
-            </p>
-            <p className="truncate text-xs text-cream/45">{sourceLabel}</p>
-          </div>
-          <div className="relative aspect-[3/4] overflow-hidden rounded-[18px] bg-screen">
-            <FaceMaskCanvas
-              videoRef={videoRef}
-              landmarkerRef={landmarkerRef}
-              canvasRef={canvasRef}
-              nftImage={previewImage}
-              placement={placement}
-              maskFlip={maskFlip}
-              fit={fit}
-              className="absolute inset-0 h-full w-full object-cover"
-            />
-          </div>
-        </div>
-
-        <div className="rounded-[24px] border border-cream/10 bg-grid/80 p-3">
-          <p className="font-[family-name:var(--font-display)] text-[10px] text-cream/50">
-            Fit
-          </p>
-          <FitSlider
-            label="Left / right"
-            value={fit.anchorOffsetX}
-            min={-0.24}
-            max={0.24}
-            step={0.005}
-            onChange={(anchorOffsetX) => updateFit({ anchorOffsetX })}
-          />
-          <FitSlider
-            label="Up / down"
-            value={fit.anchorOffsetY}
-            min={-0.24}
-            max={0.24}
-            step={0.005}
-            onChange={(anchorOffsetY) => updateFit({ anchorOffsetY })}
-          />
-          <FitSlider
-            label="Scale"
-            value={fit.scaleOffset}
-            min={-0.28}
-            max={0.4}
-            step={0.005}
-            onChange={(scaleOffset) => updateFit({ scaleOffset })}
-          />
-          <button
-            onClick={resetFit}
-            className="mt-2 w-full rounded-full border border-cream/15 bg-white/5 py-2 font-[family-name:var(--font-display)] text-[10px] text-cream/65"
-          >
-            Reset fit
-          </button>
-        </div>
-
-        <div className="mt-auto flex flex-col gap-2">
-          {message && (
-            <p className="rounded-full border border-pixelred/35 bg-pixelred/10 px-3 py-2 text-center text-sm text-pixelred">
-              {message}
-            </p>
-          )}
-          <PixelButton
-            onClick={complete}
-            size="lg"
-            disabled={saving}
-            className="w-full min-h-14"
-          >
-            <Check size={18} strokeWidth={3} />
-            {saving ? "Saving..." : "Looks good"}
-          </PixelButton>
-          <p className="text-center text-sm leading-snug text-cream/45">
-            Do this once. We will remember it on this device.
-          </p>
-        </div>
-      </aside>
+      )}
     </div>
   );
 }
@@ -1289,10 +1467,10 @@ function ToolDock({
             key={preset}
             onClick={() => setPreset(preset)}
             aria-pressed={brushPreset === preset}
-            className={`rounded-full border py-2 font-[family-name:var(--font-display)] text-[9px] ${
+            className={`rounded-full border py-2.5 font-[family-name:var(--font-display)] text-[10px] capitalize transition-all active:scale-[0.98] ${
               brushPreset === preset
                 ? "border-banana bg-banana text-screen"
-                : "border-cream/12 bg-white/5 text-cream/65"
+                : "border-cream/12 bg-white/5 text-cream/70 hover:border-cream/30 hover:bg-white/10 hover:text-cream"
             }`}
           >
             {preset}
@@ -1331,6 +1509,7 @@ function ToolDock({
         />
         <IconButton
           onClick={reset}
+          tone="danger"
           label="Reset"
           icon={<RotateCcw size={17} strokeWidth={2.5} />}
         />
@@ -1360,10 +1539,10 @@ function ToolButton({
     <button
       onClick={onClick}
       aria-pressed={active}
-      className={`flex min-h-12 items-center justify-center gap-2 rounded-full border font-[family-name:var(--font-display)] text-[10px] ${
+      className={`flex min-h-12 items-center justify-center gap-2 rounded-full border font-[family-name:var(--font-display)] text-[11px] transition-all active:scale-[0.98] ${
         active
-          ? "border-banana bg-banana text-screen"
-          : "border-cream/12 bg-white/5 text-cream/70"
+          ? "border-banana bg-banana text-screen shadow-[0_6px_18px_-8px_rgba(198,244,50,0.6)]"
+          : "border-cream/12 bg-white/5 text-cream/75 hover:border-cream/30 hover:bg-white/10 hover:text-cream"
       }`}
     >
       {icon}
@@ -1373,6 +1552,155 @@ function ToolButton({
 }
 
 function IconButton({
+  active,
+  disabled,
+  tone = "default",
+  onClick,
+  label,
+  icon,
+}: {
+  active?: boolean;
+  disabled?: boolean;
+  tone?: "default" | "danger";
+  onClick: () => void;
+  label: string;
+  icon: React.ReactNode;
+}) {
+  const base =
+    "flex min-h-11 items-center justify-center rounded-full border transition-all active:scale-95 disabled:opacity-35 disabled:pointer-events-none";
+  const style = active
+    ? "border-banana bg-banana text-screen"
+    : tone === "danger"
+      ? "border-pixelred/45 bg-pixelred/10 text-pixelred hover:border-pixelred/70 hover:bg-pixelred/15"
+      : "border-cream/12 bg-white/5 text-cream/70 hover:border-cream/30 hover:bg-white/10 hover:text-cream";
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      aria-pressed={active}
+      className={`${base} ${style}`}
+    >
+      {icon}
+    </button>
+  );
+}
+
+/** Mobile bottom toolbar — the primary controls, one-hand reachable, ≥44px
+ *  targets. Brush size and the finer options open transient bottom sheets so the
+ *  canvas keeps almost the whole screen. */
+function MobileToolbar({
+  tool,
+  setTool,
+  brushRatio,
+  imageSide,
+  canUndo,
+  undo,
+  canRedo,
+  redo,
+  previewing,
+  showPreview = true,
+  onTogglePreview,
+  onOpenBrush,
+  onOpenMore,
+  onSave,
+  saving,
+  message,
+}: {
+  tool: PrepTool;
+  setTool: (t: PrepTool) => void;
+  brushRatio: number;
+  imageSide: number;
+  canUndo: boolean;
+  undo: () => void;
+  canRedo: boolean;
+  redo: () => void;
+  previewing: boolean;
+  showPreview?: boolean;
+  onTogglePreview: () => void;
+  onOpenBrush: () => void;
+  onOpenMore: () => void;
+  onSave: () => void;
+  saving: boolean;
+  message: string | null;
+}) {
+  const brushPx = Math.max(1, Math.round(brushRatio * imageSide));
+  return (
+    <div className="shrink-0 rounded-[20px] border border-cream/10 bg-grid/90 p-2">
+      {message && (
+        <p className="mb-2 rounded-full border border-pixelred/35 bg-pixelred/10 px-3 py-1.5 text-center text-xs text-pixelred">
+          {message}
+        </p>
+      )}
+      {/* Row A — Erase / Restore + history */}
+      <div className="flex items-stretch gap-2">
+        <div className="flex flex-1 rounded-full border border-cream/12 bg-white/5 p-1">
+          <MobileSeg
+            active={tool === "erase"}
+            onClick={() => setTool("erase")}
+            label="Erase"
+            icon={<Eraser size={16} strokeWidth={2.5} />}
+          />
+          <MobileSeg
+            active={tool === "restore"}
+            onClick={() => setTool("restore")}
+            label="Restore"
+            icon={<Paintbrush size={16} strokeWidth={2.5} />}
+          />
+        </div>
+        <MobileIcon onClick={undo} disabled={!canUndo} label="Undo" icon={<Undo2 size={18} strokeWidth={2.5} />} />
+        <MobileIcon onClick={redo} disabled={!canRedo} label="Redo" icon={<Redo2 size={18} strokeWidth={2.5} />} />
+      </div>
+
+      {/* Row B — Brush size / Preview / More + Save */}
+      <div className="mt-2 flex items-stretch gap-2">
+        <button
+          onClick={onOpenBrush}
+          className="flex h-12 items-center gap-2 rounded-full border border-cream/12 bg-white/5 px-4 text-sm text-cream/85 transition-colors hover:bg-white/10 active:scale-95"
+        >
+          <Circle size={13} strokeWidth={2.5} />
+          Brush · {brushPx}px
+        </button>
+        {showPreview && (
+          <MobileIcon onClick={onTogglePreview} active={previewing} label="Preview" icon={<Eye size={18} strokeWidth={2.5} />} />
+        )}
+        <MobileIcon onClick={onOpenMore} label="More options" icon={<SlidersHorizontal size={18} strokeWidth={2.5} />} />
+        <PixelButton onClick={onSave} disabled={saving} className="min-h-12 flex-1">
+          <Check size={16} strokeWidth={3} />
+          {saving ? "Saving..." : "Save"}
+        </PixelButton>
+      </div>
+    </div>
+  );
+}
+
+function MobileSeg({
+  active,
+  onClick,
+  label,
+  icon,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      className={`flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-full font-[family-name:var(--font-display)] text-[11px] transition-colors ${
+        active ? "bg-banana text-screen" : "text-cream/70"
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function MobileIcon({
   active,
   disabled,
   onClick,
@@ -1390,16 +1718,171 @@ function IconButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
-      title={label}
       aria-pressed={active}
-      className={`flex min-h-11 items-center justify-center rounded-full border transition-colors active:scale-95 disabled:opacity-35 ${
+      className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full border transition-colors active:scale-95 disabled:opacity-35 disabled:pointer-events-none ${
         active
           ? "border-banana bg-banana text-screen"
-          : "border-cream/12 bg-white/5 text-cream/70"
+          : "border-cream/12 bg-white/5 text-cream/75 hover:bg-white/10"
       }`}
     >
       {icon}
     </button>
+  );
+}
+
+/** Bottom-sheet chrome shared by the mobile brush + more panels. */
+function SheetShell({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end">
+      <button className="absolute inset-0 bg-screen/70" onClick={onClose} aria-label="Close" />
+      <div className="relative w-full rounded-t-[24px] border-t border-cream/12 bg-grid p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="font-[family-name:var(--font-display)] text-sm text-cream">{title}</p>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="flex h-10 w-10 items-center justify-center rounded-full text-cream/70 active:scale-95"
+          >
+            <X size={18} strokeWidth={2.5} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function BrushSheet({
+  brushPreset,
+  setPreset,
+  brushRatio,
+  setBrushRatio,
+  onClose,
+}: {
+  brushPreset: BrushPreset;
+  setPreset: (p: BrushPreset) => void;
+  brushRatio: number;
+  setBrushRatio: (r: number) => void;
+  onClose: () => void;
+}) {
+  return (
+    <SheetShell title="Brush size" onClose={onClose}>
+      <div className="grid grid-cols-3 gap-2">
+        {(["small", "medium", "large"] as BrushPreset[]).map((preset) => (
+          <button
+            key={preset}
+            onClick={() => setPreset(preset)}
+            aria-pressed={brushPreset === preset}
+            className={`h-12 rounded-full border font-[family-name:var(--font-display)] text-[11px] capitalize transition-colors ${
+              brushPreset === preset
+                ? "border-banana bg-banana text-screen"
+                : "border-cream/12 bg-white/5 text-cream/70"
+            }`}
+          >
+            {preset}
+          </button>
+        ))}
+      </div>
+      <input
+        type="range"
+        min={MIN_BRUSH}
+        max={MAX_BRUSH}
+        step={0.001}
+        value={brushRatio}
+        onChange={(e) => setBrushRatio(Number(e.target.value))}
+        className="mt-5 w-full"
+        aria-label="Brush size"
+      />
+      <PixelButton onClick={onClose} className="mt-5 min-h-12 w-full">
+        Done
+      </PixelButton>
+    </SheetShell>
+  );
+}
+
+function MoreSheet({
+  fit,
+  updateFit,
+  resetFit,
+  reset,
+  maskFlip,
+  toggleFlip,
+  onClose,
+}: {
+  fit: MaskFit;
+  updateFit: (patch: Partial<MaskFit>) => void;
+  resetFit: () => void;
+  reset: () => void;
+  maskFlip: boolean;
+  toggleFlip: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <SheetShell title="Adjust fit" onClose={onClose}>
+      <FitSlider
+        label="Left / right"
+        value={fit.anchorOffsetX}
+        min={-0.24}
+        max={0.24}
+        step={0.005}
+        onChange={(anchorOffsetX) => updateFit({ anchorOffsetX })}
+      />
+      <FitSlider
+        label="Up / down"
+        value={fit.anchorOffsetY}
+        min={-0.24}
+        max={0.24}
+        step={0.005}
+        onChange={(anchorOffsetY) => updateFit({ anchorOffsetY })}
+      />
+      {/* Same expanded range as the desktop fit panel (see aside). */}
+      <FitSlider
+        label="Scale"
+        value={fit.scaleOffset}
+        min={-0.5}
+        max={2}
+        step={0.005}
+        onChange={(scaleOffset) => updateFit({ scaleOffset })}
+      />
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <button
+          onClick={resetFit}
+          className="h-12 rounded-full border border-cream/15 bg-white/5 font-[family-name:var(--font-display)] text-[10px] text-cream/75 active:scale-95"
+        >
+          Reset fit
+        </button>
+        <button
+          onClick={toggleFlip}
+          aria-pressed={maskFlip}
+          className={`flex h-12 items-center justify-center gap-1.5 rounded-full border font-[family-name:var(--font-display)] text-[10px] active:scale-95 ${
+            maskFlip
+              ? "border-banana bg-banana text-screen"
+              : "border-cream/15 bg-white/5 text-cream/75"
+          }`}
+        >
+          <FlipHorizontal2 size={15} strokeWidth={2.5} />
+          Flip mask
+        </button>
+      </div>
+      <button
+        onClick={() => {
+          reset();
+          onClose();
+        }}
+        className="mt-2 flex h-12 w-full items-center justify-center gap-2 rounded-full border border-pixelred/50 bg-pixelred/10 font-[family-name:var(--font-display)] text-[10px] text-pixelred active:scale-95"
+      >
+        <RotateCcw size={15} strokeWidth={2.5} />
+        Reset mask to original
+      </button>
+    </SheetShell>
   );
 }
 
@@ -1483,15 +1966,44 @@ function cloneImageData(data: ImageData) {
   return new ImageData(new Uint8ClampedArray(data.data), data.width, data.height);
 }
 
-function drawChecker(ctx: CanvasRenderingContext2D, w: number, h: number) {
-  ctx.fillStyle = "#171a20";
-  ctx.fillRect(0, 0, w, h);
-  const size = 18;
-  for (let y = 0; y < h; y += size) {
-    for (let x = 0; x < w; x += size) {
-      ctx.fillStyle = (x / size + y / size) % 2 === 0 ? "#242833" : "#111318";
-      ctx.fillRect(x, y, size, size);
+/** Paint the editor's PREVIEW backdrop (never part of the exported mask). */
+function drawPreviewBg(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  mode: PreviewBg
+) {
+  const checker = (a: string, b: string) => {
+    const size = 18;
+    for (let y = 0; y < h; y += size) {
+      for (let x = 0; x < w; x += size) {
+        ctx.fillStyle = (x / size + y / size) % 2 === 0 ? a : b;
+        ctx.fillRect(x, y, size, size);
+      }
     }
+  };
+  switch (mode) {
+    case "light-checker":
+      ctx.fillStyle = "#e8e6df";
+      ctx.fillRect(0, 0, w, h);
+      checker("#f4f2eb", "#d9d6cd");
+      break;
+    case "gray":
+      ctx.fillStyle = "#7d8085";
+      ctx.fillRect(0, 0, w, h);
+      break;
+    case "light":
+      ctx.fillStyle = "#f3f1ea";
+      ctx.fillRect(0, 0, w, h);
+      break;
+    case "dark":
+      ctx.fillStyle = "#0b0d10";
+      ctx.fillRect(0, 0, w, h);
+      break;
+    default: // dark-checker (the original)
+      ctx.fillStyle = "#171a20";
+      ctx.fillRect(0, 0, w, h);
+      checker("#242833", "#111318");
   }
 }
 

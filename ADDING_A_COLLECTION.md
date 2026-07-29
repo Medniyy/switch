@@ -4,9 +4,9 @@ The simple path: a collection whose PFPs are worn via the on-device background
 removal (chroma-key) fallback — **no precomputed head masks**. This needs no
 changes to the camera, editor or renderer.
 
-> Precomputed head masks (the `public/masks/<id>/*` pipeline in `scripts/mask`)
-> are an optional per-collection enhancement and are **out of scope here** — a
-> collection works without them. That pipeline will get its own doc later.
+> Precomputed head masks (`public/masks/<id>/*`) are an optional per-collection
+> enhancement and are **out of scope here** — a collection works without them.
+> No collection ships them today; every token uses the on-device path.
 
 ## 1. Register the collection
 

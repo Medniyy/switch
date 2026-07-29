@@ -6,7 +6,7 @@ import type { MaskPlacement } from "@/lib/imageUtils";
 import type { NFT } from "@/lib/types";
 
 /**
- * Resolve a token to its PRECOMPUTED head-only mask (see scripts/mask).
+ * Resolve a token to its PRECOMPUTED head-only mask, when one exists.
  *
  * The offline pipeline writes a per-collection manifest at
  * `public/masks/<collection>/index.json` mapping String(token) → placement +

@@ -1,7 +1,11 @@
 # Runtime integration — precomputed head masks (Phase 0)
 
-How the app uses the offline head-only masks at runtime, and how to regenerate
-them. Scope so far: **Mad Lads only** (the collection with a tuned config).
+How the app uses precomputed head-only masks at runtime.
+
+> **Status: dormant.** No collection ships a mask manifest today, so
+> `useHeadMask` resolves every token to `"unsupported"` and the on-device path
+> (background removal + the user-assisted mask editor) handles everything. This
+> document describes the mechanism, which stays in the code ready for use.
 
 ## Flow
 
@@ -34,9 +38,8 @@ selectedNFT {collection, id}
 
 ## The manifest
 
-Written by [build-test-batch.ts](scripts/build-test-batch.ts) to
-`public/masks/<id>/index.json` — the ONLY mask metadata the app reads (the
-`mask-review/` outputs are for humans). Keyed by `String(token)`:
+Written by the offline pipeline to `public/masks/<id>/index.json` — the ONLY
+mask metadata the app reads. Keyed by `String(token)`:
 
 ```json
 { "3": { "maskUrl": "/masks/mad-lads/3.webp", "thumbUrl": "/thumbs/mad-lads/3.webp",
@@ -94,20 +97,14 @@ small, capped overhang so the avatar hides the real hairline.
   `FACE_SCALE_FALLBACK = 0.42` (no divide-by-zero / NaN); `drawWidth` is
   hard-clamped to `[faceW*1.2, faceW*8]` so even corrupt metadata can't explode it.
 - `faceScale = seg.faceWidth / side` (the detected facial core over the final
-  square), added to metadata in [process.ts](scripts/mask/process.ts).
+  square), written into the manifest by the generator.
 
-## Regenerate
+## Generating masks
 
-```
-npx tsx scripts/build-test-batch.ts mad-lads
-```
-
-Needs `.env.local` `HELIUS_API_KEY` + network. Writes the masks, thumbs,
-`mask-review/mad-lads/*`, and `public/masks/mad-lads/index.json`.
-
-Headless placement check (proof the formula lands the face on target):
-`mask-review/mad-lads/placement-proof.png` (regenerate with the scratchpad
-`place-proof.mjs`).
+Masks are produced by the offline pipeline, which lives outside this repo. It
+emits `public/masks/<collection>/` (the `.webp` masks plus `index.json`) and
+`public/thumbs/<collection>/`; dropping those two directories in is all the app
+needs — no code change.
 
 ## Dev diagnostics
 

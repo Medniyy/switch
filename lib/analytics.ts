@@ -29,19 +29,65 @@ interface UmamiV1 {
 }
 type UmamiGlobal = Partial<UmamiV2 & UmamiV1>;
 
+function send(name: string): boolean {
+  try {
+    const umami = (window as { umami?: UmamiGlobal }).umami;
+    if (!umami) return false;
+    // v2 exposes `track`; v1 exposed `trackEvent`.
+    if (typeof umami.track === "function") umami.track(name);
+    else if (typeof umami.trackEvent === "function") umami.trackEvent(name);
+    else return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The tracker script loads async (`afterInteractive`), so a route effect can
+// easily fire BEFORE `window.umami` exists — which silently dropped every
+// collection event. Queue until the global shows up, then flush.
+const RETRY_MS = 250;
+const GIVE_UP_MS = 15_000;
+const pending: string[] = [];
+let timer: ReturnType<typeof setInterval> | null = null;
+let waited = 0;
+
+function stopRetrying() {
+  if (timer !== null) clearInterval(timer);
+  timer = null;
+}
+
+function flush() {
+  while (pending.length) {
+    // Peek, don't shift: if the tracker still isn't ready we must keep the
+    // event queued rather than lose it.
+    if (!send(pending[0])) return;
+    pending.shift();
+  }
+  stopRetrying();
+}
+
 /**
- * Fire a custom event, tolerating either Umami generation: v2 exposes `track`,
- * v1 exposed `trackEvent`. Silent no-op when analytics is off or the script
- * hasn't loaded (or was blocked) — never throws into a render path.
+ * Fire a custom event. Safe to call before the tracker has loaded; safe to call
+ * when analytics is disabled (no-op). Never throws into a render path.
+ *
+ * Gives up after GIVE_UP_MS so a blocked or missing script can't leave a timer
+ * running for the life of the page.
  */
 export function trackEvent(name: string): void {
   if (!analyticsEnabled || typeof window === "undefined") return;
-  try {
-    const umami = (window as { umami?: UmamiGlobal }).umami;
-    if (!umami) return;
-    if (typeof umami.track === "function") umami.track(name);
-    else if (typeof umami.trackEvent === "function") umami.trackEvent(name);
-  } catch {
-    // Analytics must never break the app.
-  }
+  if (send(name)) return;
+
+  pending.push(name);
+  if (timer !== null) return;
+  waited = 0;
+  timer = setInterval(() => {
+    waited += RETRY_MS;
+    if (waited >= GIVE_UP_MS) {
+      pending.length = 0;
+      stopRetrying();
+      return;
+    }
+    flush();
+  }, RETRY_MS);
 }

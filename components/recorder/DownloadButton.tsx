@@ -13,8 +13,11 @@ interface DownloadButtonProps {
 
 type ShareAction = "share" | "save";
 
-/** Default caption auto-applied when sharing a clip. */
-const SHARE_CAPTION = "Made with SWITCH 🔀";
+/** Default caption auto-applied when sharing a clip or photo. The handle
+ *  autolinks on X; the link is passed separately on the web intent so X renders
+ *  a card instead of burning characters. */
+const SHARE_CAPTION = "Rep your community.\n\nMade with @pfpapp";
+const SHARE_URL = "https://switchsol.xyz/";
 
 function buildFilename(nft: NFT | null, ext: string) {
   const d = new Date();
@@ -46,9 +49,9 @@ const isMobileLike =
  *  the browser's popup blocker silently swallows it. */
 function openXWebIntent() {
   if (typeof window === "undefined") return;
-  const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(
-    SHARE_CAPTION
-  )}`;
+  const url =
+    `https://twitter.com/intent/tweet?text=${encodeURIComponent(SHARE_CAPTION)}` +
+    `&url=${encodeURIComponent(SHARE_URL)}`;
   window.open(url, "_blank", "noopener,noreferrer");
 }
 

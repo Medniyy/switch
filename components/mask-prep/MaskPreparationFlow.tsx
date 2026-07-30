@@ -1813,7 +1813,19 @@ function MobileIcon({
   );
 }
 
-/** Bottom-sheet chrome shared by the mobile brush + more panels. */
+/**
+ * Bottom-sheet chrome shared by the mobile brush + more panels.
+ *
+ * These sheets cover roughly half a phone screen, and "Adjust fit" is exactly
+ * the panel where you most need to watch your own face — you're aligning the
+ * mask to your chin while dragging the sliders. So the sheet is translucent
+ * rather than solid, over a barely-there scrim.
+ *
+ * The gradient is deliberate: lightest at the top (nearest the preview, where
+ * seeing through matters) and denser toward the bottom (behind the buttons,
+ * where label contrast matters). A small backdrop blur lifts text off a busy
+ * camera feed without hiding where your head is.
+ */
 function SheetShell({
   title,
   onClose,
@@ -1825,8 +1837,8 @@ function SheetShell({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end">
-      <button className="absolute inset-0 bg-screen/70" onClick={onClose} aria-label="Close" />
-      <div className="relative w-full rounded-t-[24px] border-t border-cream/12 bg-grid p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <button className="absolute inset-0 bg-screen/25" onClick={onClose} aria-label="Close" />
+      <div className="relative w-full rounded-t-[24px] border-t border-cream/12 bg-gradient-to-b from-grid/70 via-grid/82 to-grid/92 backdrop-blur-md p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
         <div className="mb-3 flex items-center justify-between">
           <p className="font-[family-name:var(--font-display)] text-sm text-cream">{title}</p>
           <button
@@ -2001,7 +2013,9 @@ function FitSlider({
 }) {
   return (
     <label className="mt-3 block">
-      <span className="text-sm text-cream/50">{label}</span>
+      {/* /70 rather than /50: these labels now sit on a translucent sheet over
+          a live camera feed, and 50% washed out against a bright background. */}
+      <span className="text-sm text-cream/70">{label}</span>
       <input
         type="range"
         min={min}

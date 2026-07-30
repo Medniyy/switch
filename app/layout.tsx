@@ -25,14 +25,23 @@ const satoshi = localFont({
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://switchsol.xyz/"),
-  title: "SWITCH — Wear the Culture",
-  description:
-    "Wear any PFP as a live face mask, snap a photo or record a clip, and share it. Solana & Ethereum collections. Nothing leaves your device.",
+  title: "SWITCH — Rep the culture",
+  // One short line, because this cascades: Next resolves og:description and
+  // twitter:description from here, and treats an empty string as "unset" rather
+  // than as an override — so the only way to keep the social card uncluttered is
+  // for the description itself to be short.
+  description: "Wear any PFP as a live face mask.",
   openGraph: {
-    title: "SWITCH — Wear the Culture",
-    description:
-      "Wear any PFP as a live face mask, snap or record, and share. On-device.",
+    title: "SWITCH — Rep the culture",
     type: "website",
+    url: "/",
+    siteName: "SWITCH",
+    images: [{ url: "/og.png", width: 1200, height: 630, alt: "SWITCH — Rep the culture" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "SWITCH — Rep the culture",
+    images: ["/og.png"],
   },
   // Favicon is auto-detected from app/icon.svg.
 };

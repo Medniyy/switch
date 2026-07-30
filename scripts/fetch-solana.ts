@@ -46,7 +46,7 @@ async function fetchCollection(meta: CollectionMeta): Promise<void> {
     for (const a of items) {
       const name = nameOf(a);
       const num = numberFromName(name);
-      const image = imageOf(a);
+      const image = imageOf(a, meta.preferCdn);
       if (num === null || !image || !name) {
         skipped++;
         continue;

@@ -61,6 +61,14 @@ export interface CollectionMeta {
    * gets them back to this state at any point). Defaults to enabled.
    */
   autoCutout?: boolean;
+  /**
+   * Index the Helius CDN mirror (`content.files[].cdn_uri`) instead of the
+   * collection's own image host. Set this when that host is slow enough to hurt:
+   * Mad Lads serves ~5.7MB PNGs from an S3 bucket that regularly needs 90s+,
+   * while the same bytes come off the CDN in ~3s cold and under a second warm.
+   * Build-time only — it just changes which URL is written into the token index.
+   */
+  preferCdn?: boolean;
   fetch: FetchSource;
 }
 
@@ -96,6 +104,10 @@ export const COLLECTIONS: CollectionMeta[] = [
     tag: "Mad Lads",
     chain: "solana",
     accent: "#E1443F",
+    // madlads.s3.us-west-2.amazonaws.com is by far the slowest host in the
+    // roster — every other collection lands in under 2s, this one often doesn't
+    // finish at all. Index the CDN mirror instead.
+    preferCdn: true,
     fetch: { via: "helius", meSymbol: "mad_lads" },
   },
   {

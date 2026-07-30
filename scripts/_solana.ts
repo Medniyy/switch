@@ -37,7 +37,15 @@ export async function rpc<T>(method: string, params: unknown): Promise<T> {
 /** Mime types we can wear directly — one decoded frame, no animation. */
 const STILL_IMAGE = /^image\/(png|jpe?g|webp)$/i;
 
-export function imageOf(a: DasAsset): string | null {
+/**
+ * The URL to index for an asset.
+ *
+ * `preferCdn` (a per-collection registry flag) picks the Helius CDN mirror over
+ * the collection's own host, for collections whose host is too slow to be
+ * usable. The mirror serves the same bytes and sends `Access-Control-Allow-
+ * Origin: *`, which the canvas pipeline requires.
+ */
+export function imageOf(a: DasAsset, preferCdn = false): string | null {
   const files = a.content?.files ?? [];
   // Prefer a still raster whenever the collection ships one alongside an
   // animated original: the canvas pipeline only ever draws a single frame, and
@@ -46,7 +54,14 @@ export function imageOf(a: DasAsset): string | null {
   const image = a.content?.links?.image;
   if (image && /\.gif(\?|$)/i.test(image)) {
     const still = files.find((f) => f.mime && STILL_IMAGE.test(f.mime));
-    if (still?.uri || still?.cdn_uri) return still.uri ?? still.cdn_uri ?? null;
+    const uri = preferCdn
+      ? (still?.cdn_uri ?? still?.uri)
+      : (still?.uri ?? still?.cdn_uri);
+    if (uri) return uri;
+  }
+  if (preferCdn) {
+    const cdn = files.find((f) => f.cdn_uri)?.cdn_uri;
+    if (cdn) return cdn;
   }
   return image ?? files[0]?.cdn_uri ?? files[0]?.uri ?? null;
 }

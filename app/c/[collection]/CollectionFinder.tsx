@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import type { NFT } from "@/lib/types";
+import { collectionOpenEvent, trackEvent } from "@/lib/analytics";
 import { getCollection } from "@/lib/collections";
 import { getNFT, getNFTs, preloadCollection } from "@/lib/nftData";
 import { addRecent, getRecent } from "@/lib/recentlyViewed";
@@ -43,6 +44,13 @@ export function CollectionFinder() {
   useEffect(() => {
     if (collectionId) preloadCollection(collectionId);
   }, [collectionId]);
+
+  // One aggregate event per collection opened — the input to the public
+  // "most worn collection" ranking. Only fires for ids in the registry, so a
+  // junk URL can't invent an event name. No-op when analytics is unconfigured.
+  useEffect(() => {
+    if (meta) trackEvent(collectionOpenEvent(meta.id));
+  }, [meta]);
 
   // "Recently worn" from this collection only.
   useEffect(() => {

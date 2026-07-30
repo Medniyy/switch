@@ -1,8 +1,10 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
+import Script from "next/script";
 import { GradientField } from "@/components/ui/GradientField";
 import { AppShell } from "@/components/layout/AppShell";
+import { analyticsEnabled, UMAMI_SRC, UMAMI_WEBSITE_ID } from "@/lib/analytics";
 
 // Clash Display (display) + Satoshi (body) — variable TTFs, self-hosted.
 const clash = localFont({
@@ -51,6 +53,15 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${clash.variable} ${satoshi.variable} h-full`}>
       <body className="min-h-full">
+        {/* Cookie-less, aggregate-only, and absent entirely unless configured
+            at build time — see lib/analytics.ts and the privacy page. */}
+        {analyticsEnabled && (
+          <Script
+            src={UMAMI_SRC}
+            data-website-id={UMAMI_WEBSITE_ID}
+            strategy="afterInteractive"
+          />
+        )}
         <GradientField />
         <AppShell>{children}</AppShell>
       </body>

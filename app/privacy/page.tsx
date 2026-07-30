@@ -62,8 +62,18 @@ export default function PrivacyPolicy() {
             </a>
             , a privacy-friendly, cookie-less analytics tool, purely to understand
             aggregate usage and improve the app. It does not collect personal
-            information and does not track you across sites. As of this version it
-            is not yet enabled.
+            information and does not track you across sites.
+            <br />
+            <br />
+            We record page views and one custom event: which collection was
+            opened. That event carries the collection name only — never the
+            specific NFT you picked, never a wallet address, and never anything
+            about your camera, photos, or the masks you make. Your approximate
+            country is derived from your IP address so we can show how many
+            countries SWITCH is used in; the IP address itself is not stored by
+            us. Some of these totals — visitors, countries, and the most-opened
+            collections — are displayed publicly on the site as aggregate counts
+            that cannot be traced back to any individual.
           </Section>
 
           <Section title="Network requests and third parties">

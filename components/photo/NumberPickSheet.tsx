@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import type { Collection, NFT } from "@/lib/types";
 import { getNFT } from "@/lib/nftData";
-import { getCollection } from "@/lib/collections";
+import { getCollection, usesAutoCutout } from "@/lib/collections";
 import { useNFTImage } from "@/components/ar/useNFTImage";
 import { useCutoutImage } from "@/components/ar/useCutoutImage";
 import { resolveSavedMaskImage } from "@/lib/resolveMask";
@@ -65,13 +65,17 @@ export function NumberPickSheet({
     };
   }, [result]);
 
-  // Background removal ALWAYS runs for a fresh PFP (never gated by collection,
-  // settings or timing) — `settled` guards against selecting the un-processed
-  // art while the cutout is still computing.
+  // Background removal runs for every fresh PFP except collections whose art the
+  // colour key can't handle (`autoCutout: false`) — those hand back the untouched
+  // artwork for the user to erase. It is never gated by settings or timing;
+  // `settled` guards against selecting the un-processed art mid-cutout.
   const { image: rawImage, status: rawStatus } = useNFTImage(
     savedImage ? undefined : result?.image
   );
-  const { image: cutout, settled } = useCutoutImage(rawImage, !savedImage);
+  const { image: cutout, settled } = useCutoutImage(
+    rawImage,
+    !savedImage && usesAutoCutout(result?.collection)
+  );
   const effective = savedImage ?? cutout;
   const artFailed = !savedImage && rawStatus === "error";
   const ready =

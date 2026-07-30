@@ -24,7 +24,7 @@ import {
   type PhotoResult,
 } from "@/lib/photo";
 import { drawBananaScatter } from "@/lib/bananaRain";
-import { isMonkeyDaoCollection } from "@/lib/collections";
+import { isMonkeyDaoCollection, usesAutoCutout } from "@/lib/collections";
 import {
   blobToImage,
   loadSavedMask,
@@ -255,7 +255,10 @@ export function PhotoEditor({
     !initialMaskImage &&
     (headMask.status === "unsupported" || headMask.status === "rejected");
   const { image: initRaw } = useNFTImage(useLegacy ? initialNFT?.image : undefined);
-  const { image: initCutout } = useCutoutImage(initRaw, useLegacy);
+  const { image: initCutout } = useCutoutImage(
+    initRaw,
+    useLegacy && usesAutoCutout(initialNFT?.collection)
+  );
   const initImage =
     initialMaskImage ??
     (headMask.status === "available" ? headMask.image : useLegacy ? initCutout : null);

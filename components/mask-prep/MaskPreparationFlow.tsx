@@ -8,6 +8,7 @@ import {
   Eye,
   FlipHorizontal2,
   Home as HomeIcon,
+  Image as ImageIcon,
   Paintbrush,
   Palette,
   Redo2,
@@ -42,6 +43,7 @@ import {
   type MaskMode,
   type SavedUserMask,
 } from "@/lib/userMasks";
+import { usesAutoCutout } from "@/lib/collections";
 import { useHeadMask } from "@/components/ar/useHeadMask";
 import { useNFTImage } from "@/components/ar/useNFTImage";
 import { FaceMaskCanvas } from "@/components/ar/FaceMaskCanvas";
@@ -86,6 +88,10 @@ interface StartingMaskState {
   status: "loading" | "processing" | "ready" | "error";
   seedImage: HTMLImageElement | null;
   initialImage: HTMLImageElement | null;
+  /** The untouched PFP art, background included. Backs the editor's "Restore
+   *  artwork" action; null when the seed came from a precomputed mask (there is
+   *  no original to fall back to in that path). */
+  artworkImage: HTMLImageElement | null;
   placement: MaskPlacement | null;
   source: StartSource;
   message?: string;
@@ -296,6 +302,7 @@ export function MaskPreparationFlow({
             <MaskPrepEditor
               seedImage={starting.seedImage}
               initialImage={starting.initialImage ?? starting.seedImage}
+              artworkImage={starting.artworkImage}
               placement={starting.placement}
               source={starting.source}
               initialMaskFlip={existingRecord?.maskFlip ?? false}
@@ -394,6 +401,7 @@ function useStartingMask(
   const headMask = useHeadMask(nft);
   const shouldLoadOriginal =
     headMask.status === "unsupported" || headMask.status === "rejected";
+  const autoCutout = usesAutoCutout(nft.collection);
   const { image: rawImage, status: rawStatus } = useNFTImage(
     shouldLoadOriginal ? nft.image : undefined
   );
@@ -413,6 +421,14 @@ function useStartingMask(
     }
     if (!rawImage) {
       setAutoStatus(rawStatus === "loading" ? "processing" : "idle");
+      return;
+    }
+
+    // Collections whose art the colour key can't handle skip it entirely and
+    // seed with the untouched artwork, which the user erases by hand.
+    if (!autoCutout) {
+      setAutoImage(rawImage);
+      setAutoStatus("ready");
       return;
     }
 
@@ -440,7 +456,7 @@ function useStartingMask(
       cancelled = true;
       window.cancelAnimationFrame(frame);
     };
-  }, [rawImage, rawStatus, shouldLoadOriginal]);
+  }, [rawImage, rawStatus, shouldLoadOriginal, autoCutout]);
 
   const existing = existingImage;
 
@@ -449,6 +465,7 @@ function useStartingMask(
       status: "ready",
       seedImage: headMask.image,
       initialImage: existing ?? headMask.image,
+      artworkImage: null,
       placement: existingRecord?.placement ?? headMask.placement,
       source: existing ? "saved" : "approved",
     };
@@ -460,6 +477,7 @@ function useStartingMask(
         status: "ready",
         seedImage: autoImage,
         initialImage: existing ?? autoImage,
+        artworkImage: rawImage,
         placement: existingRecord?.placement ?? null,
         source: existing ? "saved" : "automatic",
         message:
@@ -474,6 +492,7 @@ function useStartingMask(
           status: "ready",
           seedImage: existing,
           initialImage: existing,
+          artworkImage: null,
           placement: existingRecord?.placement ?? null,
           source: "saved",
           message:
@@ -484,6 +503,7 @@ function useStartingMask(
         status: "error",
         seedImage: null,
         initialImage: null,
+        artworkImage: null,
         placement: null,
         source: "automatic",
       };
@@ -492,6 +512,7 @@ function useStartingMask(
       status: autoStatus === "processing" ? "processing" : "loading",
       seedImage: null,
       initialImage: null,
+      artworkImage: null,
       placement: null,
       source: "automatic",
     };
@@ -501,6 +522,7 @@ function useStartingMask(
     status: "loading",
     seedImage: null,
     initialImage: null,
+    artworkImage: null,
     placement: null,
     source: "approved",
   };
@@ -656,6 +678,7 @@ function ChoiceCard({
 function MaskPrepEditor({
   seedImage,
   initialImage,
+  artworkImage,
   placement,
   source,
   initialMaskFlip,
@@ -668,6 +691,7 @@ function MaskPrepEditor({
 }: {
   seedImage: HTMLImageElement;
   initialImage: HTMLImageElement;
+  artworkImage: HTMLImageElement | null;
   placement: MaskPlacement | null;
   source: StartSource;
   initialMaskFlip: boolean;
@@ -943,6 +967,49 @@ function MaskPrepEditor({
     setHistoryCount(0);
     setRedoCount(0);
     setDirty(false);
+    schedulePreview(true);
+    setViewVersion((v) => v + 1);
+  };
+
+  /**
+   * Bring back the untouched artwork, background and all, so the user can erase
+   * it by hand. This is the escape hatch when the automatic cutout ate part of
+   * the character — or, for collections with `autoCutout: false`, simply the way
+   * back after experimenting.
+   *
+   * It also re-points the RESTORE brush at the full artwork: the brush paints
+   * from `originalDataRef`, so without this the user could erase background but
+   * never paint any of it back.
+   *
+   * The artwork is drawn into the EXISTING canvas size rather than its own. Undo
+   * snapshots are ImageData at the current dimensions, so resizing here would
+   * make every one of them un-restorable.
+   */
+  const restoreArtwork = () => {
+    const editCanvas = editCanvasRef.current;
+    const ctx = editCanvas?.getContext("2d", { willReadFrequently: true });
+    const current = editDataRef.current;
+    if (!artworkImage || !editCanvas || !ctx || !current) return;
+    if (!window.confirm("Bring back the full artwork with its background?")) return;
+
+    const full = makeSquareCanvas(artworkImage, editCanvas.width);
+    const fctx = full.getContext("2d", { willReadFrequently: true });
+    if (!fctx) return;
+    const data = fctx.getImageData(0, 0, full.width, full.height);
+
+    // Undoable like any other edit, so a mis-tap costs one Undo.
+    historyRef.current.push(cloneImageData(current));
+    if (historyRef.current.length > MAX_UNDO) historyRef.current.shift();
+    redoRef.current = [];
+
+    originalCanvasRef.current = full;
+    originalDataRef.current = cloneImageData(data);
+    editDataRef.current = data;
+    ctx.putImageData(data, 0, 0);
+
+    setHistoryCount(historyRef.current.length);
+    setRedoCount(0);
+    setDirty(true);
     schedulePreview(true);
     setViewVersion((v) => v + 1);
   };
@@ -1277,6 +1344,7 @@ function MaskPrepEditor({
             canRedo={canRedo}
             redo={redo}
             reset={reset}
+            restoreArtwork={artworkImage ? restoreArtwork : undefined}
             maskFlip={maskFlip}
             toggleFlip={() => setMaskFlip((v) => !v)}
           />
@@ -1406,6 +1474,7 @@ function MaskPrepEditor({
           updateFit={updateFit}
           resetFit={resetFit}
           reset={reset}
+          restoreArtwork={artworkImage ? restoreArtwork : undefined}
           maskFlip={maskFlip}
           toggleFlip={() => setMaskFlip((v) => !v)}
           onClose={() => setMobileSheet("none")}
@@ -1427,6 +1496,7 @@ function ToolDock({
   canRedo,
   redo,
   reset,
+  restoreArtwork,
   maskFlip,
   toggleFlip,
 }: {
@@ -1441,6 +1511,8 @@ function ToolDock({
   canRedo: boolean;
   redo: () => void;
   reset: () => void;
+  /** Omitted when there is no original artwork to fall back to. */
+  restoreArtwork?: () => void;
   maskFlip: boolean;
   toggleFlip: () => void;
 }) {
@@ -1520,6 +1592,16 @@ function ToolDock({
           icon={<FlipHorizontal2 size={17} strokeWidth={2.5} />}
         />
       </div>
+
+      {restoreArtwork && (
+        <button
+          onClick={restoreArtwork}
+          className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-full border border-cream/15 bg-white/5 font-[family-name:var(--font-display)] text-[10px] text-cream/75 active:scale-95"
+        >
+          <ImageIcon size={15} strokeWidth={2.5} />
+          Bring back full artwork
+        </button>
+      )}
     </div>
   );
 }
@@ -1813,6 +1895,7 @@ function MoreSheet({
   updateFit,
   resetFit,
   reset,
+  restoreArtwork,
   maskFlip,
   toggleFlip,
   onClose,
@@ -1821,6 +1904,8 @@ function MoreSheet({
   updateFit: (patch: Partial<MaskFit>) => void;
   resetFit: () => void;
   reset: () => void;
+  /** Omitted when there is no original artwork to fall back to. */
+  restoreArtwork?: () => void;
   maskFlip: boolean;
   toggleFlip: () => void;
   onClose: () => void;
@@ -1872,6 +1957,18 @@ function MoreSheet({
           Flip mask
         </button>
       </div>
+      {restoreArtwork && (
+        <button
+          onClick={() => {
+            restoreArtwork();
+            onClose();
+          }}
+          className="mt-2 flex h-12 w-full items-center justify-center gap-2 rounded-full border border-cream/15 bg-white/5 font-[family-name:var(--font-display)] text-[10px] text-cream/75 active:scale-95"
+        >
+          <ImageIcon size={15} strokeWidth={2.5} />
+          Bring back full artwork
+        </button>
+      )}
       <button
         onClick={() => {
           reset();

@@ -144,15 +144,17 @@ export function removeBackground(
   if (n < 1) return null;
   const midX = Math.floor((w - n) / 2);
   const midY = Math.floor((h - n) / 2);
+  // Order matters: backgroundPalette() anchors on the first two (the top
+  // corners), so keep them first if you ever add or reorder patches.
   const candidates: RGB[] = [
-    samplePatch(data, w, 0, 0, n),
-    samplePatch(data, w, w - n, 0, n),
-    samplePatch(data, w, 0, h - n, n),
-    samplePatch(data, w, w - n, h - n, n),
-    samplePatch(data, w, midX, 0, n),
-    samplePatch(data, w, midX, h - n, n),
-    samplePatch(data, w, 0, midY, n),
-    samplePatch(data, w, w - n, midY, n),
+    samplePatch(data, w, 0, 0, n), // top-left
+    samplePatch(data, w, w - n, 0, n), // top-right
+    samplePatch(data, w, 0, h - n, n), // bottom-left
+    samplePatch(data, w, w - n, h - n, n), // bottom-right
+    samplePatch(data, w, midX, 0, n), // top-mid
+    samplePatch(data, w, midX, h - n, n), // bottom-mid
+    samplePatch(data, w, 0, midY, n), // left-mid
+    samplePatch(data, w, w - n, midY, n), // right-mid
   ];
 
   const hard = tolerance * MAX_DIST;
@@ -160,16 +162,7 @@ export function removeBackground(
   const hard2 = hard * hard;
   const soft2 = soft * soft;
 
-  // A reference nobody else corroborates is probably the SUBJECT poking into
-  // that patch (a hat in a corner) — drop it so we never key subject colours.
-  // On a flat/gently-graded backdrop, neighbouring patches agree WELL within
-  // the hard threshold. Corroboration is deliberately tighter than `soft`: a
-  // 50/50 seam mix between two distinct areas sits ~half their separation from
-  // each parent, which can sneak under `soft` and would wrongly validate
-  // subject colours (multi-panel art) as background.
-  const refs = candidates.filter((c, i) =>
-    candidates.some((o, j) => j !== i && dist3(c, o) <= hard)
-  );
+  const refs = backgroundPalette(candidates, hard);
   if (refs.length === 0) return null;
 
   // Flood fill from the border. `state`: 0 = unvisited, 1 = queued/cleared.
@@ -266,6 +259,57 @@ export function removeBackground(
   const sy = Math.max(0, Math.min(h - side, Math.round(cy - side / 2)));
   octx.drawImage(canvas, sx, sy, side, side, 0, 0, side, side);
   return out;
+}
+
+/**
+ * Pick the background colours out of the eight sampled patches.
+ *
+ * A patch nobody else corroborates is probably the SUBJECT poking into it (a hat
+ * in a corner), so it must never join the palette. On a flat/gently-graded
+ * backdrop neighbouring patches agree WELL within the hard threshold, which is
+ * why corroboration is deliberately tighter than `soft`: a 50/50 seam mix
+ * between two distinct areas sits ~half their separation from each parent, can
+ * sneak under `soft`, and would wrongly validate subject colours as background.
+ *
+ * Mutual corroboration ALONE isn't enough though. On a bust PFP the character
+ * routinely fills the entire bottom edge, so the bottom-left, bottom-right and
+ * bottom-mid patches all land on the same garment and cheerfully vouch for each
+ * other — and the subject then keys itself out. (Sensei's pandas, whose robes
+ * span the full width, hit this every time: the pale body became "background"
+ * and the flood fill ate the face.)
+ *
+ * The two TOP corners are the one part of the frame a bust practically never
+ * reaches, so when they agree we anchor on them and grow the palette outward: a
+ * patch joins only once it is within `hard` of a colour already in the palette.
+ * A graded backdrop still chains in shade by shade, while an isolated pair of
+ * subject patches has no link back to the top and is left out.
+ *
+ * When the top corners DISAGREE there is no trustworthy anchor (the subject is
+ * probably sitting in one of them), so we fall back to plain corroboration.
+ */
+function backgroundPalette(candidates: RGB[], hard: number): RGB[] {
+  const corroborated = () =>
+    candidates.filter((c, i) =>
+      candidates.some((o, j) => j !== i && dist3(c, o) <= hard)
+    );
+
+  const [topLeft, topRight] = candidates;
+  if (dist3(topLeft, topRight) > hard) return corroborated();
+
+  // Seed with both top corners, then repeatedly admit any patch that matches
+  // something already admitted, until nothing new joins.
+  const inPalette = candidates.map((_, i) => i < 2);
+  for (let grew = true; grew; ) {
+    grew = false;
+    candidates.forEach((c, i) => {
+      if (inPalette[i]) return;
+      if (candidates.some((o, j) => inPalette[j] && dist3(c, o) <= hard)) {
+        inPalette[i] = true;
+        grew = true;
+      }
+    });
+  }
+  return candidates.filter((_, i) => inPalette[i]);
 }
 
 function dist3(a: RGB, b: RGB): number {

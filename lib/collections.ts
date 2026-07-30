@@ -54,6 +54,13 @@ export interface CollectionMeta {
   accent?: string;
   /** Hide from the gallery + routes without deleting it (e.g. data not ready). */
   hidden?: boolean;
+  /**
+   * Set `false` for art the chroma-key genuinely cannot separate, so the editor
+   * opens on the UNTOUCHED artwork instead of a mangled automatic cutout. The
+   * user then erases the background by hand (and "Restore artwork" in the editor
+   * gets them back to this state at any point). Defaults to enabled.
+   */
+  autoCutout?: boolean;
   fetch: FetchSource;
 }
 
@@ -112,6 +119,11 @@ export const COLLECTIONS: CollectionMeta[] = [
     tag: "Sensei",
     chain: "solana",
     accent: "#4E7CD6",
+    // The pandas sit on a near-black radial gradient and routinely wear BLACK
+    // (balaclavas, kabuto helmets, puffer jackets) — garment and backdrop are
+    // literally the same RGB and connected to the border, so no colour key can
+    // tell them apart. Seed the editor with the untouched art instead.
+    autoCutout: false,
     fetch: { via: "helius", meSymbol: "sensei" },
   },
 
@@ -169,6 +181,16 @@ export const DEFAULT_ACCENT = "#C6F432";
 
 export function getCollection(id: string): CollectionMeta | undefined {
   return COLLECTIONS.find((c) => c.id === id);
+}
+
+/**
+ * Whether a collection's art should get the automatic chroma-key cutout as its
+ * starting mask. Unknown ids default to `true` so a collection is never silently
+ * opted out by a typo.
+ */
+export function usesAutoCutout(id: string | null | undefined): boolean {
+  if (!id) return true;
+  return getCollection(id)?.autoCutout !== false;
 }
 
 /**

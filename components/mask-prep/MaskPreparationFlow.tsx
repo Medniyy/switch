@@ -44,6 +44,7 @@ import {
   type SavedUserMask,
 } from "@/lib/userMasks";
 import { usesAutoCutout } from "@/lib/collections";
+import { MASK_SOURCE_WIDTH } from "@/lib/imageSrc";
 import { useHeadMask } from "@/components/ar/useHeadMask";
 import { useNFTImage } from "@/components/ar/useNFTImage";
 import { FaceMaskCanvas } from "@/components/ar/FaceMaskCanvas";
@@ -2044,8 +2045,22 @@ interface PinchState {
   startPanY: number;
 }
 
+/**
+ * The mask bitmap is square and sized from the source art, which some
+ * collections ship far larger than anything we draw (Mad Lads at 2048×2560 gave
+ * a 2560² canvas — 25MB per undo snapshot, and MAX_UNDO is 18). Capping it keeps
+ * the editor usable on a phone; 1024² is still several times the size the mask
+ * is ever composited at.
+ */
+const MAX_MASK_SIDE = MASK_SOURCE_WIDTH;
+
 function makeSquareCanvas(image: HTMLImageElement, sideOverride?: number) {
-  const side = sideOverride ?? Math.max(image.naturalWidth, image.naturalHeight, 1);
+  const side =
+    sideOverride ??
+    Math.min(
+      Math.max(image.naturalWidth, image.naturalHeight, 1),
+      MAX_MASK_SIDE
+    );
   const canvas = document.createElement("canvas");
   canvas.width = side;
   canvas.height = side;

@@ -1,6 +1,7 @@
 "use client";
 
 import type { NFT } from "@/lib/types";
+import { NFTThumb } from "@/components/common/NFTThumb";
 
 interface NFTCardProps {
   nft: NFT;
@@ -14,13 +15,10 @@ export function NFTCard({ nft, onClick }: NFTCardProps) {
       className="group block text-left bg-grid pixel-border p-1.5 transition-transform duration-75 hover:-translate-y-0.5 hover:pixel-border-banana"
     >
       <div className="aspect-square bg-screen overflow-hidden">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+        <NFTThumb
           src={nft.image}
           alt={nft.name}
-          crossOrigin="anonymous"
-          loading="lazy"
-          decoding="async"
+          lazy
           className="w-full h-full object-cover pixelated"
         />
       </div>

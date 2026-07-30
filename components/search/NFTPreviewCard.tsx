@@ -2,6 +2,7 @@
 
 import { ArrowRight } from "lucide-react";
 import type { NFT } from "@/lib/types";
+import { NFTThumb } from "@/components/common/NFTThumb";
 import { PixelCard } from "@/components/ui/PixelCard";
 import { PixelButton } from "@/components/ui/PixelButton";
 
@@ -15,11 +16,9 @@ export function NFTPreviewCard({ nft, onUse }: NFTPreviewCardProps) {
   return (
     <PixelCard accent className="w-full max-w-sm mx-auto p-3">
       <div className="aspect-square bg-screen overflow-hidden border-[3px] border-screen">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+        <NFTThumb
           src={nft.image}
           alt={nft.name}
-          crossOrigin="anonymous"
           className="w-full h-full object-cover"
         />
       </div>

@@ -5,6 +5,7 @@ import { ArrowRight, ChevronDown } from "lucide-react";
 import { VISIBLE_COLLECTIONS } from "@/lib/collections";
 import { BrandLogo } from "@/components/ui/BrandLogo";
 import { CollectionCarousel } from "@/components/gallery/CollectionCarousel";
+import { StatsStrip } from "@/components/stats/StatsStrip";
 
 /**
  * The opening / landing screen: the SWITCH mark + name (the main brand
@@ -98,6 +99,9 @@ export function WelcomeScreen({ onEnter }: { onEnter: () => void }) {
             className="transition-transform group-hover:translate-x-0.5"
           />
         </button>
+        {/* Aggregate usage. Renders nothing without stats, and is dropped on
+            short/landscape viewports where every pixel is spoken for. */}
+        <StatsStrip className="short:hidden px-6" />
         <div className="flex items-center gap-4 text-cream/35 text-xs">
           <a href="/privacy" className="hover:text-cream/70 transition-colors">
             Privacy

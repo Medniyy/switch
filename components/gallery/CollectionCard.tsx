@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { Crown } from "lucide-react";
 import type { CollectionMeta } from "@/lib/collections";
 import { coverSrc, DEFAULT_ACCENT } from "@/lib/collections";
+import { useStats } from "@/components/stats/useStats";
 
 /** One interactive collection tile in the "Choose your wear" gallery. */
 export function CollectionCard({
@@ -15,6 +17,12 @@ export function CollectionCard({
 }) {
   const [broken, setBroken] = useState(false);
   const accent = collection.accent ?? DEFAULT_ACCENT;
+
+  // Usage stats are decoration: absent until they load, and absent entirely
+  // when analytics is off or unreachable.
+  const stats = useStats();
+  const opens = stats?.collectionOpens[collection.id] ?? 0;
+  const isTop = !!stats?.topCollection && stats.topCollection === collection.id;
 
   return (
     <Link
@@ -50,6 +58,17 @@ export function CollectionCard({
           {collection.chain === "solana" ? "SOL" : "ETH"}
         </span>
 
+        {/* Crown on the most-opened collection. Only ever one card wears it. */}
+        {isTop && (
+          <span
+            className="absolute top-2 right-2 glass rounded-full p-1 text-banana"
+            title="Most worn collection"
+            aria-label="Most worn collection"
+          >
+            <Crown size={12} strokeWidth={2.5} />
+          </span>
+        )}
+
         {/* lime ring on hover */}
         <span
           aria-hidden
@@ -67,6 +86,11 @@ export function CollectionCard({
         <span className="font-[family-name:var(--font-display)] text-sm text-cream/90 truncate">
           {collection.tag}
         </span>
+        {opens > 0 && (
+          <span className="ml-auto shrink-0 text-[10px] text-cream/40 tabular-nums">
+            {opens.toLocaleString("en-US")}
+          </span>
+        )}
       </div>
     </Link>
   );

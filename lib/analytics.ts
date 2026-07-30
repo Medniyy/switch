@@ -14,7 +14,15 @@
 export const UMAMI_SRC = process.env.NEXT_PUBLIC_UMAMI_SRC ?? "";
 export const UMAMI_WEBSITE_ID = process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID ?? "";
 
-export const analyticsEnabled = !!(UMAMI_SRC && UMAMI_WEBSITE_ID);
+/**
+ * Production builds only. `.env.local` supplies the Umami config to EVERY local
+ * command, so without this gate `next dev` and the Playwright suite post real
+ * traffic to the live dashboard — which is exactly what happened: 86 phantom
+ * `localhost` page views. `next dev` is NODE_ENV=development, the deployed
+ * static export is NODE_ENV=production, so this cleanly separates them.
+ */
+export const analyticsEnabled =
+  !!(UMAMI_SRC && UMAMI_WEBSITE_ID) && process.env.NODE_ENV === "production";
 
 /** Event name for "someone opened this collection", e.g. `open:mad-lads`. */
 export function collectionOpenEvent(collectionId: string): string {

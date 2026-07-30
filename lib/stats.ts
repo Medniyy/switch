@@ -117,7 +117,13 @@ export async function fetchStats(
     };
     if (!share.token || !share.websiteId) return null;
 
-    const headers = { "x-umami-share-token": share.token };
+    // BOTH headers are required. The token alone returns 401 — `share-context`
+    // is what tells Umami to authorise against the share's scopes rather than a
+    // user account. (Confirmed by watching Umami's own share dashboard.)
+    const headers = {
+      "x-umami-share-token": share.token,
+      "x-umami-share-context": "1",
+    };
     const range = `startAt=${ALL_TIME_START}&endAt=${Date.now()}`;
     const base = `${origin}/api/websites/${share.websiteId}`;
 

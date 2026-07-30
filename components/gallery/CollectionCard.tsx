@@ -58,14 +58,26 @@ export function CollectionCard({
           {collection.chain === "solana" ? "SOL" : "ETH"}
         </span>
 
-        {/* Crown on the most-opened collection. Only ever one card wears it. */}
-        {isTop && (
+        {/* Usage badge. Crown and count live in ONE element rather than
+            opposite corners — two small marks competed with each other and with
+            the art; together they carry enough weight to read at a glance.
+            The leader goes solid banana so its rank is unmistakable. */}
+        {opens > 0 && (
           <span
-            className="absolute top-2 right-2 glass rounded-full p-1 text-banana"
-            title="Most worn collection"
-            aria-label="Most worn collection"
+            className={`absolute bottom-2 left-2 flex items-center gap-1.5 rounded-full px-3 py-1.5 shadow-[0_2px_12px_rgba(0,0,0,0.5)] ${
+              isTop ? "bg-banana text-screen" : "glass text-cream"
+            }`}
+            title={isTop ? "Most opened collection" : undefined}
+            aria-label={
+              isTop
+                ? `Most opened collection, ${opens.toLocaleString("en-US")} opens`
+                : `${opens.toLocaleString("en-US")} opens`
+            }
           >
-            <Crown size={12} strokeWidth={2.5} />
+            {isTop && <Crown size={16} strokeWidth={2.75} />}
+            <span className="font-[family-name:var(--font-display)] font-medium text-sm leading-none tabular-nums">
+              {opens.toLocaleString("en-US")}
+            </span>
           </span>
         )}
 
@@ -86,11 +98,6 @@ export function CollectionCard({
         <span className="font-[family-name:var(--font-display)] text-sm text-cream/90 truncate">
           {collection.tag}
         </span>
-        {opens > 0 && (
-          <span className="ml-auto shrink-0 text-[10px] text-cream/40 tabular-nums">
-            {opens.toLocaleString("en-US")}
-          </span>
-        )}
       </div>
     </Link>
   );

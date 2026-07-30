@@ -96,18 +96,17 @@ export default function Home() {
         <CollectionCarousel collections={VISIBLE_COLLECTIONS} />
       </div>
 
-      <footer className="px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] flex flex-col items-center text-center gap-1.5 text-cream/35 text-xs">
-        <div className="flex items-center gap-4">
-          <a href="/privacy" className="hover:text-cream/70 transition-colors">
-            Privacy
-          </a>
-          <a href="/terms" className="hover:text-cream/70 transition-colors">
-            Terms
-          </a>
-        </div>
-        <span className="max-w-xs md:max-w-none">
-          A community tool. Artwork &amp; trademarks belong to their owners.
-        </span>
+      {/* The "community tool / trademarks" disclaimer used to sit here as a
+          second line and pulled attention off the collections. It still lives
+          in full on /terms and /privacy — both linked right here — and in the
+          desktop sidebar, so nothing is lost by keeping this row to the links. */}
+      <footer className="px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] flex items-center justify-center gap-4 text-cream/35 text-xs">
+        <a href="/privacy" className="hover:text-cream/70 transition-colors">
+          Privacy
+        </a>
+        <a href="/terms" className="hover:text-cream/70 transition-colors">
+          Terms
+        </a>
       </footer>
 
       {showTutorial && <StoryTutorial onDone={dismissTutorial} />}

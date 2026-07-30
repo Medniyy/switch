@@ -76,7 +76,7 @@ test("exactly one collection wears the crown, and counts show", async ({
   await page.getByRole("button", { name: "ENTER" }).click();
   await page.waitForTimeout(400);
 
-  await expect(page.getByLabel("Most worn collection")).toHaveCount(1);
+  await expect(page.getByLabel(/Most opened collection/)).toHaveCount(1);
   await expect(page.getByText("9,312")).toBeVisible();
 });
 
@@ -87,6 +87,6 @@ test("stats surfaces vanish entirely when there are no stats", async ({
   await gotoWithStats(page, "/", null);
 
   await expect(page.getByText(/people have switched/)).toHaveCount(0);
-  await expect(page.getByLabel("Most worn collection")).toHaveCount(0);
+  await expect(page.getByLabel(/Most opened collection/)).toHaveCount(0);
   expect(await documentScrolls(page)).toBe(false);
 });

@@ -71,8 +71,9 @@ async function download(url: string, dest: string): Promise<void> {
   ensureDir(COVERS_DIR);
   for (const c of COLLECTIONS) {
     try {
-      const primary =
-        c.fetch.via === "helius"
+      const primary = c.coverFromToken
+        ? null
+        : c.fetch.via === "helius"
           ? await solanaCoverUrl(c)
           : await ethereumCoverUrl(c);
       const url = primary ?? firstTokenImage(c.id);

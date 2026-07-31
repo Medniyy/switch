@@ -69,6 +69,13 @@ export interface CollectionMeta {
    * Build-time only — it just changes which URL is written into the token index.
    */
   preferCdn?: boolean;
+  /**
+   * Take the gallery cover from the collection's lowest-numbered token instead
+   * of the collection NFT's own art. Some collections never replaced the art
+   * they minted the collection NFT with — Solana in Pajamas still carries the
+   * pre-reveal silhouette — which makes for a dead card. Build-time only.
+   */
+  coverFromToken?: boolean;
   fetch: FetchSource;
 }
 
@@ -137,6 +144,16 @@ export const COLLECTIONS: CollectionMeta[] = [
     // tell them apart. Seed the editor with the untouched art instead.
     autoCutout: false,
     fetch: { via: "helius", meSymbol: "sensei" },
+  },
+  {
+    id: "solana-in-pajamas",
+    name: "Solana in Pajamas",
+    tag: "Pajamas",
+    chain: "solana",
+    accent: "#00E7E7",
+    // The collection NFT is still the pre-reveal silhouette — use real art.
+    coverFromToken: true,
+    fetch: { via: "helius", meSymbol: "solana_in_pajamas" },
   },
 
   // ---- Ethereum ----

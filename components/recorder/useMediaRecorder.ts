@@ -3,28 +3,42 @@
 import { RefObject, useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore, VIDEO_QUALITY } from "@/store/useAppStore";
 import { createBoostedMicTrack, type ProcessedMic } from "@/lib/audio";
+import { startMp4Recording, type Mp4RecorderHandle } from "@/lib/mp4Recorder";
 
 export const MAX_SECONDS = 60;
 
-/** Opus at 128 kbps — clear voice, well above the WebView's low default. */
+/** Target capture rate for the WebCodecs path, held exactly (see mp4Recorder). */
+export const TARGET_FPS = 30;
+
+/** AAC-LC at 128 kbps — clear voice, and the codec MP4 editors expect. */
 const AUDIO_BITRATE = 128_000;
 
+// ---------------------------------------------------------------------------
+// Fallback engine (MediaRecorder). The WebCodecs path in lib/mp4Recorder is the
+// primary one; this stays for browsers that can't run it.
+//
 // MP4 (H.264/AAC) first: WebM doesn't play on Apple devices (Safari, iOS, macOS
 // QuickTime/Photos), so a WebM clip a user records here is unshareable to half
-// their audience. Every modern target — iOS Safari (MP4-only), desktop
-// Chrome/Edge/Safari, and current Android System WebView on devices with a
-// hardware H.264 encoder (Seeker included) — records MP4 fine, so we ask for it
-// first and only fall back to WebM where MP4 genuinely isn't supported.
+// their audience.
+//
+// ⚠️ The audio codec MUST be named explicitly. Asking for plain
+// "video/mp4;codecs=avc1" leaves the audio codec up to the browser, and Chrome
+// picks **Opus** — legal in MP4 by a late spec addendum, and rejected by
+// essentially every video editor. That is what made exported clips uneditable
+// until they'd been round-tripped through Telegram (which re-encodes to AAC).
+// `mp4a.40.2` is AAC-LC. Keep it first; keep the bare entries after it as a last
+// resort so a browser that offers no explicit-AAC MP4 still records something.
 //
 // ⚠️ Android caveat to verify on-device: a few older Android WebViews report
 // MP4 as supported but encode it in software (~0 fps at high res). If recording
-// regresses on the Seeker, move the WebM entries back above the MP4 ones here —
-// that's the single revert. (See cross-platform test pass.)
+// regresses on the Seeker, move the WebM entries above the MP4 ones here.
 const MIME_CANDIDATES = [
+  "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+  "video/mp4;codecs=avc1,mp4a.40.2",
   "video/mp4;codecs=avc1",
   "video/mp4",
-  "video/webm;codecs=vp9",
-  "video/webm;codecs=vp8",
+  "video/webm;codecs=vp9,opus",
+  "video/webm;codecs=vp8,opus",
   "video/webm",
 ];
 
@@ -36,6 +50,33 @@ function pickMimeType(): string | null {
   return null;
 }
 
+/**
+ * Build a MediaRecorder, walking the candidate list on *construction* failure —
+ * not just on isTypeSupported. Some Android WebViews answer `true` for a codec
+ * string and then throw when actually asked to encode it, which would otherwise
+ * kill recording outright instead of degrading to the next option.
+ */
+function createFallbackRecorder(
+  stream: MediaStream,
+  bitrate: number
+): { recorder: MediaRecorder; mimeType: string } | null {
+  if (typeof MediaRecorder === "undefined") return null;
+  for (const mimeType of MIME_CANDIDATES) {
+    if (!MediaRecorder.isTypeSupported(mimeType)) continue;
+    try {
+      const recorder = new MediaRecorder(stream, {
+        mimeType,
+        videoBitsPerSecond: bitrate,
+        audioBitsPerSecond: AUDIO_BITRATE,
+      });
+      return { recorder, mimeType };
+    } catch {
+      /* claimed support but won't construct — try the next candidate */
+    }
+  }
+  return null;
+}
+
 export interface RecordingResult {
   blob: Blob;
   url: string;
@@ -43,9 +84,13 @@ export interface RecordingResult {
 }
 
 /**
- * Records the canvas via captureStream into a Blob. Enforces a hard 60s cap.
- * Mixes in mic audio when enabled (falls back to silent if blocked). Video and
- * audio bitrates follow the selected quality preset.
+ * Records the composited canvas into a Blob. Enforces a hard 60s cap and mixes
+ * in mic audio when enabled (falls back to silent if blocked).
+ *
+ * Two engines, decided at start() and never mid-clip:
+ *   1. WebCodecs (lib/mp4Recorder) — a flat, faststart, constant-frame-rate
+ *      H.264/AAC MP4. This is the one that produces an editable file.
+ *   2. MediaRecorder — the legacy path, kept for browsers without WebCodecs.
  */
 export function useMediaRecorder(
   canvasRef: RefObject<HTMLCanvasElement | null>,
@@ -59,17 +104,23 @@ export function useMediaRecorder(
   const audioProcRef = useRef<ProcessedMic | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stopTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Manual canvas-frame pump (see start()). On iOS Safari the auto-capturing
-  // captureStream(fps) video track silently stops emitting frames after a few
-  // seconds — the recording freezes on the last frame while audio keeps going.
-  // Driving requestFrame() ourselves each rAF defeats that.
+  // Manual canvas-frame pump, fallback engine only (see startFallback). On iOS
+  // Safari the auto-capturing captureStream(fps) video track silently stops
+  // emitting frames after a few seconds — the recording freezes on the last
+  // frame while audio keeps going. Driving requestFrame() ourselves defeats that.
   const frameTrackRef = useRef<CanvasCaptureMediaStreamTrack | null>(null);
   const frameRafRef = useRef<number | null>(null);
+  // Active WebCodecs recording, when that engine won the coin toss at start().
+  const mp4Ref = useRef<Mp4RecorderHandle | null>(null);
+  // Guards double-stop: stop() is wired to both the button and the 60s timeout.
+  const stoppingRef = useRef(false);
 
   const [isRecording, setIsRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [result, setResult] = useState<RecordingResult | null>(null);
-  const [supported] = useState(() => pickMimeType() !== null);
+  const [supported] = useState(
+    () => pickMimeType() !== null || typeof VideoEncoder !== "undefined"
+  );
 
   const stopMic = useCallback(() => {
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -88,22 +139,160 @@ export function useMediaRecorder(
     frameTrackRef.current = null;
   }, []);
 
+  const publish = useCallback((blob: Blob, ext: string) => {
+    const url = URL.createObjectURL(blob);
+    setResult({ blob, url, ext });
+  }, []);
+
   const stop = useCallback(() => {
-    const rec = recorderRef.current;
-    if (rec && rec.state !== "inactive") rec.stop();
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
     clearTimers();
-  }, [clearTimers]);
+
+    const mp4 = mp4Ref.current;
+    if (mp4) {
+      mp4Ref.current = null;
+      // The encoder flush is async. Drop out of the recording state immediately
+      // so the UI stops counting; the preview appears when the blob lands.
+      setIsRecording(false);
+      setElapsed(0);
+      mp4
+        .stop()
+        .then((blob) => publish(blob, "mp4"))
+        .catch(() => {
+          /* encoder failed after the fact — nothing to publish */
+        })
+        .finally(() => {
+          stoppingRef.current = false;
+        });
+      return;
+    }
+
+    const rec = recorderRef.current;
+    if (rec && rec.state !== "inactive") {
+      rec.stop(); // onstop publishes and clears stoppingRef
+    } else {
+      stoppingRef.current = false;
+    }
+  }, [clearTimers, publish]);
+
+  /** Legacy engine: canvas.captureStream + MediaRecorder. */
+  const startFallback = useCallback(
+    (canvas: HTMLCanvasElement, bitrate: number) => {
+      // Prefer manual frame control (captureStream(0) + requestFrame): the auto
+      // pacer freezes on iOS Safari mid-recording. Fall back to a paced stream
+      // where requestFrame isn't available.
+      const manualStream = canvas.captureStream(0);
+      const manualTrack = manualStream.getVideoTracks()[0] as
+        | CanvasCaptureMediaStreamTrack
+        | undefined;
+      const canPumpFrames = typeof manualTrack?.requestFrame === "function";
+
+      let canvasStream: MediaStream;
+      if (canPumpFrames && manualTrack) {
+        canvasStream = manualStream;
+        frameTrackRef.current = manualTrack;
+      } else {
+        manualStream.getTracks().forEach((t) => t.stop());
+        canvasStream = canvas.captureStream(TARGET_FPS);
+        frameTrackRef.current = null;
+      }
+
+      const tracks: MediaStreamTrack[] = [...canvasStream.getVideoTracks()];
+
+      // Mix in microphone audio when enabled, reusing the track the camera hook
+      // already acquired (mic was prompted up-front, together with the camera, so
+      // it's actually granted here — the old per-record getUserMedia silently
+      // failed on iOS Chrome). If it's missing/blocked, record silently.
+      const micTrack = audioTrackRef?.current;
+      if (
+        useAppStore.getState().audioEnabled &&
+        micTrack &&
+        micTrack.readyState === "live"
+      ) {
+        // Route the mic through our WebAudio boost/limiter so it records loud and
+        // clean like the native camera (see lib/audio.ts). The graph reads the
+        // live track without consuming it, so the preview's mic stays intact.
+        const processed = createBoostedMicTrack(micTrack);
+        if (processed) {
+          audioProcRef.current = processed;
+          tracks.push(processed.track);
+        } else {
+          const clone = micTrack.clone();
+          micStreamRef.current = new MediaStream([clone]);
+          tracks.push(clone);
+        }
+      } else {
+        micStreamRef.current = null;
+      }
+
+      const built = createFallbackRecorder(new MediaStream(tracks), bitrate);
+      if (!built) {
+        stopMic();
+        return false;
+      }
+      const { recorder, mimeType } = built;
+      chunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        // Stop the clock no matter how the recording ended (manual stop, the 60s
+        // cap, or a track ending) so no interval survives into the next session.
+        clearTimers();
+        const ext = mimeType.includes("mp4") ? "mp4" : "webm";
+        publish(new Blob(chunksRef.current, { type: mimeType }), ext);
+        setIsRecording(false);
+        setElapsed(0);
+        stopMic();
+        stoppingRef.current = false;
+      };
+
+      // Flush in 1s timeslices. Without this, MediaRecorder buffers the whole
+      // clip until stop(); iOS Safari stalls the video encoder a few seconds in
+      // when it isn't drained periodically (the symptom: video freezes mid-clip
+      // while audio keeps going).
+      recorder.start(1000);
+      recorderRef.current = recorder;
+
+      // Pump a fresh canvas frame into the recording stream, throttled to the
+      // target rate. FaceMaskCanvas keeps the canvas painted; requestFrame()
+      // snapshots its current content so the video track never goes stale.
+      if (frameTrackRef.current) {
+        const FRAME_INTERVAL = 1000 / TARGET_FPS;
+        let lastFrameAt = 0;
+        const pump = (now: number) => {
+          const rec = recorderRef.current;
+          const track = frameTrackRef.current;
+          if (!track || !rec || rec.state !== "recording") {
+            frameRafRef.current = null;
+            return;
+          }
+          if (now - lastFrameAt >= FRAME_INTERVAL) {
+            track.requestFrame();
+            lastFrameAt = now;
+          }
+          frameRafRef.current = requestAnimationFrame(pump);
+        };
+        frameRafRef.current = requestAnimationFrame(pump);
+      }
+      return true;
+    },
+    [audioTrackRef, clearTimers, publish, stopMic]
+  );
 
   const start = useCallback(async () => {
     const canvas = canvasRef.current;
-    const mimeType = pickMimeType();
-    if (!canvas || !mimeType) return;
+    if (!canvas) return;
 
-    // Guard against re-entry: start() is async (it awaits the mic), so the
-    // `isRecording` state lags a tap. Without this, a quick double-tap (or a
-    // re-render) spins up a second recorder + a second interval, producing the
-    // overlapping countdown that resumes from the previous clip's time.
+    // Guard against re-entry: start() is async, so the `isRecording` state lags
+    // a tap. Without this, a quick double-tap (or a re-render) spins up a second
+    // recorder + a second interval, producing the overlapping countdown that
+    // resumes from the previous clip's time.
+    if (mp4Ref.current) return;
     if (recorderRef.current && recorderRef.current.state === "recording") return;
+    if (stoppingRef.current) return;
 
     // Defensive: kill any timer left over from a prior session before we start
     // a new one, so a stale interval can't keep driving `elapsed`.
@@ -115,122 +304,42 @@ export function useMediaRecorder(
       return null;
     });
 
-    // Prefer manual frame control (captureStream(0) + requestFrame): the auto
-    // pacer freezes on iOS Safari mid-recording. Fall back to a paced stream
-    // where requestFrame isn't available.
-    const manualStream = canvas.captureStream(0);
-    const manualTrack = manualStream.getVideoTracks()[0] as
-      | CanvasCaptureMediaStreamTrack
-      | undefined;
-    const canPumpFrames = typeof manualTrack?.requestFrame === "function";
-
-    let canvasStream: MediaStream;
-    if (canPumpFrames && manualTrack) {
-      canvasStream = manualStream;
-      frameTrackRef.current = manualTrack;
-    } else {
-      manualStream.getTracks().forEach((t) => t.stop());
-      canvasStream = canvas.captureStream(30);
-      frameTrackRef.current = null;
-    }
-
-    const tracks: MediaStreamTrack[] = [...canvasStream.getVideoTracks()];
-
-    // Mix in microphone audio when enabled, reusing the track the camera hook
-    // already acquired (mic was prompted up-front, together with the camera, so
-    // it's actually granted here — the old per-record getUserMedia silently
-    // failed on iOS Chrome). If it's missing/blocked, record silently.
-    const micTrack = audioTrackRef?.current;
-    if (
-      useAppStore.getState().audioEnabled &&
-      micTrack &&
-      micTrack.readyState === "live"
-    ) {
-      // Route the mic through our WebAudio boost/limiter so it records loud and
-      // clean like the native camera (the WebView's own gain is unreliable when
-      // noise-suppression is off — see lib/audio.ts). The graph reads the live
-      // track without consuming it, so the preview's mic stays intact. If
-      // WebAudio is unavailable, fall back to a raw clone (so stopping the
-      // recorder doesn't kill the preview's mic track).
-      const processed = createBoostedMicTrack(micTrack);
-      if (processed) {
-        audioProcRef.current = processed;
-        tracks.push(processed.track);
-      } else {
-        const clone = micTrack.clone();
-        micStreamRef.current = new MediaStream([clone]);
-        tracks.push(clone);
-      }
-    } else {
-      micStreamRef.current = null;
-    }
-
-    // Apply the selected quality preset's bitrate (the canvas resolution is
-    // capped to match inside FaceMaskCanvas) plus a solid audio bitrate.
+    // The canvas resolution is capped to match the preset inside FaceMaskCanvas;
+    // here we only need its bitrate.
     const preset = VIDEO_QUALITY[useAppStore.getState().videoQuality];
-    const stream = new MediaStream(tracks);
-    const recorder = new MediaRecorder(stream, {
-      mimeType,
-      videoBitsPerSecond: preset.bitrate,
-      audioBitsPerSecond: AUDIO_BITRATE,
-    });
-    chunksRef.current = [];
+    const audioOn = useAppStore.getState().audioEnabled;
+    const micTrack = audioOn ? (audioTrackRef?.current ?? null) : null;
 
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunksRef.current.push(e.data);
-    };
-    recorder.onstop = () => {
-      // Stop the clock no matter how the recording ended (manual stop, the 60s
-      // cap, or a track ending) so no interval survives into the next session.
-      clearTimers();
-      const ext = mimeType.includes("mp4") ? "mp4" : "webm";
-      const blob = new Blob(chunksRef.current, { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      setResult({ blob, url, ext });
-      setIsRecording(false);
-      setElapsed(0);
-      stopMic();
-    };
+    // Engine 1: WebCodecs. Everything that can fail is probed inside, before any
+    // frame is captured, so a `null` here costs the user nothing.
+    let started = false;
+    try {
+      const handle = await startMp4Recording(canvas, {
+        fps: TARGET_FPS,
+        bitrate: preset.bitrate,
+        audioTrack: micTrack,
+      });
+      if (handle) {
+        mp4Ref.current = handle;
+        started = true;
+      }
+    } catch {
+      mp4Ref.current = null;
+    }
 
-    // Flush in 1s timeslices. Without this, MediaRecorder buffers the whole clip
-    // until stop(); iOS Safari stalls the video encoder a few seconds in when it
-    // isn't drained periodically (the symptom: video freezes mid-clip while audio
-    // keeps going). Periodic ondataavailable chunks keep the pipeline flowing.
-    recorder.start(1000);
-    recorderRef.current = recorder;
+    // Engine 2: MediaRecorder.
+    if (!started) started = startFallback(canvas, preset.bitrate);
+    if (!started) return;
+
     setIsRecording(true);
     setElapsed(0);
-
-    // Pump a fresh canvas frame into the recording stream, throttled to ~30fps
-    // (the rAF cadence is the display's 60Hz — pushing 60 frames/s of 1080p at
-    // the encoder is wasteful and can back it up). FaceMaskCanvas keeps the
-    // canvas painted; requestFrame() snapshots its current content so the video
-    // track never goes stale.
-    if (frameTrackRef.current) {
-      const FRAME_INTERVAL = 1000 / 30;
-      let lastFrameAt = 0;
-      const pump = (now: number) => {
-        const rec = recorderRef.current;
-        const track = frameTrackRef.current;
-        if (!track || !rec || rec.state !== "recording") {
-          frameRafRef.current = null;
-          return;
-        }
-        if (now - lastFrameAt >= FRAME_INTERVAL) {
-          track.requestFrame();
-          lastFrameAt = now;
-        }
-        frameRafRef.current = requestAnimationFrame(pump);
-      };
-      frameRafRef.current = requestAnimationFrame(pump);
-    }
 
     const startedAt = Date.now();
     timerRef.current = setInterval(() => {
       setElapsed((Date.now() - startedAt) / 1000);
     }, 100);
     stopTimeoutRef.current = setTimeout(stop, MAX_SECONDS * 1000);
-  }, [canvasRef, stop, stopMic, clearTimers]);
+  }, [canvasRef, audioTrackRef, clearTimers, startFallback, stop]);
 
   const reset = useCallback(() => {
     setResult((prev) => {
@@ -243,6 +352,8 @@ export function useMediaRecorder(
   useEffect(() => {
     return () => {
       clearTimers();
+      mp4Ref.current?.cancel();
+      mp4Ref.current = null;
       const rec = recorderRef.current;
       if (rec && rec.state !== "inactive") rec.stop();
       stopMic();

@@ -123,6 +123,10 @@ export function useMediaRecorder(
   // returned to the live camera with no preview, no file and no explanation —
   // indistinguishable, from the user's side, from the button not working.
   const [error, setError] = useState<string | null>(null);
+  // Encoding a long clip is not instant: the encoder has to drain and the muxer
+  // has to write a ~90 MB in-memory MP4. Without a visible "saving" state that
+  // gap looks exactly like the stop button having done nothing at all.
+  const [saving, setSaving] = useState(false);
   const [supported] = useState(
     () => pickMimeType() !== null || typeof VideoEncoder !== "undefined"
   );
@@ -161,6 +165,7 @@ export function useMediaRecorder(
       // so the UI stops counting; the preview appears when the blob lands.
       setIsRecording(false);
       setElapsed(0);
+      setSaving(true);
       mp4
         .stop()
         .then(({ blob, audioDropped }) => {
@@ -184,6 +189,7 @@ export function useMediaRecorder(
           // The mic graph is owned per-recording; without this it stayed open
           // after every WebCodecs take (only the fallback path tore it down).
           stopMic();
+          setSaving(false);
           stoppingRef.current = false;
         });
       return;
@@ -389,5 +395,15 @@ export function useMediaRecorder(
     };
   }, [clearTimers, stopMic]);
 
-  return { isRecording, elapsed, result, error, supported, start, stop, reset };
+  return {
+    isRecording,
+    elapsed,
+    result,
+    error,
+    saving,
+    supported,
+    start,
+    stop,
+    reset,
+  };
 }

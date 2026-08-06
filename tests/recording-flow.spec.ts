@@ -133,6 +133,39 @@ test("stopping a teleprompter take yields a clip you can watch and save", async 
 // worse than no test. The guard it would have covered lives in lib/audio.ts and
 // needs a real device to exercise.
 
+test("a stop that never drains still gives the take back", async ({ page }) => {
+  // flush() is not guaranteed to settle — a wedged hardware encoder leaves the
+  // promise pending, which is neither resolve nor reject, so every caller just
+  // waits forever. That is precisely the reported symptom: stop, and nothing at
+  // all happens. Whatever already reached the muxer must still be finalized.
+  await page.addInitScript(() => {
+    if (typeof VideoEncoder === "undefined") return;
+    VideoEncoder.prototype.flush = () => new Promise<void>(() => {});
+  });
+
+  await liveVideoStage(page);
+  await setScript(page, SCRIPT);
+
+  await page.getByLabel("Start recording").click();
+  await expect(page.getByLabel("Stop recording")).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.waitForTimeout(3000);
+  await page.getByLabel("Stop recording").click();
+
+  // While the encoder is being waited on, the user must not be left staring at
+  // a screen that looks like the button did nothing.
+  await expect(page.getByText(/saving your clip/i)).toBeVisible({
+    timeout: 5_000,
+  });
+
+  // The watchdog gives up and finalizes what it has, rather than hanging.
+  await expect(page.getByText("YOUR SWITCH IS READY")).toBeVisible({
+    timeout: 40_000,
+  });
+  await expect(page.locator("video[src^='blob:']")).toBeVisible();
+});
+
 test("a clip that came back silent says so instead of pretending", async ({
   page,
 }) => {

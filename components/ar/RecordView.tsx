@@ -95,8 +95,17 @@ export function RecordView() {
   // Shared between the camera hook (which fills it) and the recorder (which reads
   // it). Owned here so we can also gate camera/mic acquisition below.
   const audioTrackRef = useRef<MediaStreamTrack | null>(null);
-  const { isRecording, elapsed, result, error: recordError, supported, start, stop, reset } =
-    useMediaRecorder(canvasRef, audioTrackRef);
+  const {
+    isRecording,
+    elapsed,
+    result,
+    error: recordError,
+    saving,
+    supported,
+    start,
+    stop,
+    reset,
+  } = useMediaRecorder(canvasRef, audioTrackRef);
 
   const [faceDetected, setFaceDetected] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -580,6 +589,17 @@ export function RecordView() {
               </button>
             )}
           </div>
+        )}
+
+        {/* Encoding a long clip takes real time. Say so, or stopping a 44s take
+            looks identical to the button doing nothing. */}
+        {saving && !inEditor && (
+          <StageOverlay>
+            <BlinkingCursor label="SAVING YOUR CLIP" className="text-xs" />
+            <p className="mt-3 text-cream/60 text-lg">
+              Finishing the video — this can take a few seconds.
+            </p>
+          </StageOverlay>
         )}
 
         {/* Recording problems. Shown whether or not a clip survived, and ABOVE

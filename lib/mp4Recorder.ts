@@ -33,6 +33,37 @@ const AUDIO_BITRATE = 128_000;
 const KEYFRAME_SECONDS = 2;
 
 /**
+ * How long to wait for an encoder to drain before giving up on it.
+ *
+ * `flush()` is not guaranteed to settle. A backed-up or wedged hardware encoder
+ * can leave the promise pending forever, and because that is neither a resolve
+ * nor a reject, every caller downstream simply waits: no clip, no error, no
+ * indication that anything went wrong. That is the difference between "stop
+ * failed" and "stop did nothing", and it is the latter that is unfixable from
+ * the outside. On timeout we keep whatever chunks already reached the muxer and
+ * finalize those — a slightly short clip beats a lost one.
+ */
+const FLUSH_TIMEOUT_MS = 15_000;
+
+/** Resolve with `null` if `p` has not settled within `ms`. Rejections pass
+ *  through untouched — a real error still deserves to be reported. */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise<T | null>((resolve, reject) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
+}
+
+/**
  * H.264 profiles/levels in descending preference. High@4.0 covers 1080p30 and
  * gives the best quality per bit; the Main and Constrained-Baseline entries are
  * there for encoders (typically mobile hardware) that refuse High. The trailing
@@ -405,13 +436,16 @@ export async function startMp4Recording(
         // kept; the rest is dropped silently in favour of saving the take.
         if (audioEncoder && audioEncoder.state === "configured") {
           try {
-            await audioEncoder.flush();
+            await withTimeout(audioEncoder.flush(), FLUSH_TIMEOUT_MS);
           } catch (err) {
             audioFailed = err as Error;
           }
         }
         if (videoEncoder && videoEncoder.state === "configured") {
-          await videoEncoder.flush();
+          // Deliberately not fatal on timeout: the frames that already made it
+          // through the output callback are in the muxer, so finalizing gives
+          // the user a real clip instead of an endless wait.
+          await withTimeout(videoEncoder.flush(), FLUSH_TIMEOUT_MS);
         }
         // Only a video failure is fatal: with no picture there is no clip.
         if (videoFailed) throw videoFailed;

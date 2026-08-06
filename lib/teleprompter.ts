@@ -12,12 +12,25 @@
 
 const KEY = "switch:teleprompter";
 
+/**
+ * Bumped when a stored default becomes wrong enough to override.
+ *
+ * The pace lives in localStorage, so lowering DEFAULT_TELEPROMPTER.wpm only
+ * ever reached brand-new users — anyone who had opened the prompter once kept
+ * the old 130 wpm forever and saw no change at all. Version 2 re-adopts the
+ * current default pace once; the script and text size are the user's own
+ * choices and are always preserved.
+ */
+const SETTINGS_VERSION = 2;
+
 export interface TeleprompterSettings {
   script: string;
   /** Scroll speed in words per minute. */
   wpm: number;
   /** Text size in px, at the overlay's own scale. */
   fontSize: number;
+  /** Storage generation; see SETTINGS_VERSION. Absent on pre-v2 records. */
+  version?: number;
 }
 
 /** The floor has to sit well below the default, because `readSeconds` clamps to
@@ -37,6 +50,7 @@ export const DEFAULT_TELEPROMPTER: TeleprompterSettings = {
   script: "",
   wpm: 65,
   fontSize: 20,
+  version: SETTINGS_VERSION,
 };
 
 const clamp = (n: number, lo: number, hi: number) =>
@@ -67,10 +81,16 @@ export function loadTeleprompter(): TeleprompterSettings {
     const raw = window.localStorage.getItem(KEY);
     if (!raw) return { ...DEFAULT_TELEPROMPTER };
     const parsed = JSON.parse(raw) as Partial<TeleprompterSettings>;
+    // A record written before the pace was halved carries the old default and
+    // would otherwise pin this user to it permanently.
+    const stale = (parsed.version ?? 1) < SETTINGS_VERSION;
     return {
+      version: SETTINGS_VERSION,
       script: typeof parsed.script === "string" ? parsed.script : "",
       wpm: clamp(
-        typeof parsed.wpm === "number" ? parsed.wpm : DEFAULT_TELEPROMPTER.wpm,
+        typeof parsed.wpm === "number" && !stale
+          ? parsed.wpm
+          : DEFAULT_TELEPROMPTER.wpm,
         WPM_MIN,
         WPM_MAX
       ),
@@ -90,7 +110,12 @@ export function loadTeleprompter(): TeleprompterSettings {
 export function saveTeleprompter(s: TeleprompterSettings): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(KEY, JSON.stringify(s));
+    // Stamp the current version so a deliberate pace choice made from here on
+    // is respected and not re-defaulted by the next migration.
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ ...s, version: SETTINGS_VERSION })
+    );
   } catch {
     /* storage full or blocked — the script just won't persist */
   }

@@ -119,6 +119,27 @@ test("the default pace is readable, not a sprint", async ({ page }) => {
   expect(Number(min)).toBeLessThanOrEqual(65);
 });
 
+test("an existing 130 wpm setting is migrated to the slower pace", async ({
+  page,
+}) => {
+  // The pace is persisted, so lowering the default only ever reached brand-new
+  // users: anyone who had opened the prompter once kept 130 wpm and saw no
+  // change whatsoever. The script itself must survive the migration.
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "switch:teleprompter",
+      JSON.stringify({ script: "Kept across the migration.", wpm: 130, fontSize: 20 })
+    );
+  });
+
+  await liveVideoStage(page);
+  await page.getByRole("button", { name: "Teleprompter" }).click();
+  await expect(page.getByLabel("PACE")).toHaveValue("65");
+  await expect(page.getByLabel("Script")).toHaveValue(
+    "Kept across the migration."
+  );
+});
+
 test("warns when the script cannot fit inside the 60s cap", async ({ page }) => {
   await liveVideoStage(page);
   // ~300 words at the default 65 wpm is well over four minutes.

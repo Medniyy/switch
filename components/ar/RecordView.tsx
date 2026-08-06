@@ -10,6 +10,7 @@ import {
   Edit3,
   ImagePlus,
   MicOff,
+  ScrollText,
   Search,
   Settings,
   Sparkles,
@@ -27,6 +28,15 @@ import { RecordButton } from "./RecordButton";
 import { useMediaRecorder } from "@/components/recorder/useMediaRecorder";
 import { VideoPreview } from "@/components/recorder/VideoPreview";
 import { DownloadButton } from "@/components/recorder/DownloadButton";
+import { Countdown, Teleprompter } from "@/components/recorder/Teleprompter";
+import { TeleprompterSheet } from "@/components/recorder/TeleprompterSheet";
+import {
+  DEFAULT_TELEPROMPTER,
+  hasScript,
+  loadTeleprompter,
+  saveTeleprompter,
+  type TeleprompterSettings,
+} from "@/lib/teleprompter";
 import { PixelButton } from "@/components/ui/PixelButton";
 import { BlinkingCursor } from "@/components/ui/BlinkingCursor";
 import { PhotoEditor, type InitialPlacement } from "@/components/photo/PhotoEditor";
@@ -102,6 +112,33 @@ export function RecordView() {
   const [maskLoadMessage, setMaskLoadMessage] = useState<string | null>(null);
   const [editingMask, setEditingMask] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [teleprompter, setTeleprompter] = useState<TeleprompterSettings>(
+    DEFAULT_TELEPROMPTER
+  );
+  const [scriptOpen, setScriptOpen] = useState(false);
+  // >0 while the 3-2-1 lead-in is on screen; recording starts when it hits 0.
+  const [countdown, setCountdown] = useState(0);
+
+  // Read the stored script after mount — localStorage isn't available during
+  // the static prerender, and reading it in a useState initialiser would make
+  // the server and client markup disagree.
+  useEffect(() => setTeleprompter(loadTeleprompter()), []);
+
+  const updateTeleprompter = useCallback((next: TeleprompterSettings) => {
+    setTeleprompter(next);
+    saveTeleprompter(next);
+  }, []);
+
+  /** Photo mode has nothing to read from, so the prompter is video-only. */
+  const scriptActive = captureMode === "video" && hasScript(teleprompter);
+
+  // With a script loaded, give the reader a 3-2-1 before the recorder rolls —
+  // otherwise the clip opens with them reaching for the button and hunting for
+  // the first line, which also eats into the 60s cap.
+  const beginRecording = useCallback(() => {
+    if (scriptActive) setCountdown(3);
+    else void start();
+  }, [scriptActive, start]);
 
   // The secret MonkeyDAO (SMB Gen2/Gen3) filter menu — gated by stable id.
   const monkeyDao = isMonkeyDaoCollection(selectedNFT?.collection);
@@ -423,6 +460,30 @@ export function RecordView() {
           />
         )}
 
+        {/* Teleprompter — a DOM overlay ABOVE the canvas, never drawn into it,
+            so the script cannot end up in the exported clip. Scrolls only while
+            actually recording. */}
+        {scriptActive && !anyResult && !inEditor && (
+          <Teleprompter
+            script={teleprompter.script}
+            wpm={teleprompter.wpm}
+            fontSize={teleprompter.fontSize}
+            running={isRecording}
+            onEdit={isRecording ? undefined : () => setScriptOpen(true)}
+          />
+        )}
+
+        {/* 3-2-1 lead-in, then the recorder rolls */}
+        {countdown > 0 && !anyResult && !inEditor && (
+          <Countdown
+            from={countdown}
+            onDone={() => {
+              setCountdown(0);
+              void start();
+            }}
+          />
+        )}
+
         {/* Recorded playback */}
         {result && <VideoPreview url={result.url} />}
         {/* Photo result preview */}
@@ -487,6 +548,21 @@ export function RecordView() {
                 <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-banana text-screen">
                   <Banana size={10} strokeWidth={3} />
                 </span>
+              </button>
+            )}
+            {!isPhoto && (
+              <button
+                onClick={() => setScriptOpen(true)}
+                aria-label="Teleprompter"
+                aria-pressed={hasScript(teleprompter)}
+                title="Teleprompter"
+                className={`w-11 h-11 rounded-full border-[2px] flex items-center justify-center backdrop-blur-sm transition-colors active:scale-95 ${
+                  hasScript(teleprompter)
+                    ? "bg-banana text-screen border-banana"
+                    : "bg-screen/55 text-cream border-cream/40"
+                }`}
+              >
+                <ScrollText size={19} strokeWidth={2.5} />
               </button>
             )}
             {isPhoto && (
@@ -593,8 +669,12 @@ export function RecordView() {
               <RecordButton
                 isRecording={isRecording}
                 elapsed={elapsed}
-                disabled={camStatus !== "ready" || meshStatus !== "ready"}
-                onStart={start}
+                disabled={
+                  camStatus !== "ready" ||
+                  meshStatus !== "ready" ||
+                  countdown > 0
+                }
+                onStart={beginRecording}
                 onStop={stop}
               />
             )}
@@ -753,6 +833,15 @@ export function RecordView() {
               </button>
             </div>
           </div>
+        )}
+
+        {/* Teleprompter script sheet */}
+        {scriptOpen && !anyResult && !inEditor && (
+          <TeleprompterSheet
+            value={teleprompter}
+            onChange={updateTeleprompter}
+            onClose={() => setScriptOpen(false)}
+          />
         )}
 
         {/* Settings sheet (gear) — opacity / size / quality */}

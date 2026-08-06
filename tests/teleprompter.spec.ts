@@ -106,9 +106,22 @@ test("script rewinds between takes", async ({ page }) => {
     .toBe(0);
 });
 
+test("the default pace is readable, not a sprint", async ({ page }) => {
+  // The first release defaulted to 130 wpm and the scroll outran the reader.
+  // Guarded as a number because the failure is silent: WPM_MIN clamps
+  // readSeconds, so a default below the floor would be quietly raised back up
+  // and the scroll would speed up again with nothing to show for it.
+  await liveVideoStage(page);
+  await page.getByRole("button", { name: "Teleprompter" }).click();
+  const pace = page.getByLabel("PACE");
+  await expect(pace).toHaveValue("65");
+  const min = await pace.getAttribute("min");
+  expect(Number(min)).toBeLessThanOrEqual(65);
+});
+
 test("warns when the script cannot fit inside the 60s cap", async ({ page }) => {
   await liveVideoStage(page);
-  // ~300 words at the default 130 wpm is well over two minutes.
+  // ~300 words at the default 65 wpm is well over four minutes.
   await setScript(page, "word ".repeat(300));
   const fit = page.getByTestId("teleprompter-fit");
   await expect(fit).toContainText(/longer than the 60s/i);

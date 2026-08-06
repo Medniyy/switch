@@ -20,16 +20,22 @@ export interface TeleprompterSettings {
   fontSize: number;
 }
 
-export const WPM_MIN = 80;
+/** The floor has to sit well below the default, because `readSeconds` clamps to
+ *  it — a default under WPM_MIN would be silently clamped back up and the PACE
+ *  slider would do nothing at its slow end. */
+export const WPM_MIN = 40;
 export const WPM_MAX = 220;
 export const FONT_MIN = 14;
 export const FONT_MAX = 34;
 
-/** 130 wpm is a relaxed talking-head pace — slower than reading aloud flat out,
- *  which is what people actually do on camera. */
+/** 65 wpm. The first pass shipped 130 — a "relaxed talking-head pace" on paper,
+ *  and much too fast to read off in practice, because the number has to cover
+ *  not just speaking but glancing back to find your place. Halved after the
+ *  scroll was reported as running away from the reader; the slider still goes
+ *  up to 220 for anyone who wants the old pace back. */
 export const DEFAULT_TELEPROMPTER: TeleprompterSettings = {
   script: "",
-  wpm: 130,
+  wpm: 65,
   fontSize: 20,
 };
 

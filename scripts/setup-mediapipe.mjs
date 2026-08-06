@@ -8,7 +8,7 @@
  * Runs automatically via the "prebuild" / "postinstall" npm scripts, but you
  * can run it manually: node scripts/setup-mediapipe.mjs
  */
-import { cp, mkdir, writeFile, access } from "node:fs/promises";
+import { cp, mkdir, readdir, rm, writeFile, access } from "node:fs/promises";
 import { join } from "node:path";
 
 const ROOT = process.cwd();
@@ -32,10 +32,52 @@ async function exists(p) {
 async function main() {
   await mkdir(OUT_DIR, { recursive: true });
 
-  // 1. Copy WASM fileset
+  // 1. Copy WASM fileset — but not all of it.
+  //
+  // The package ships three builds of the same runtime, ~32MB together:
+  //   vision_wasm_internal        SIMD, classic script   <- the one we load
+  //   vision_wasm_module_internal SIMD, ES module        <- never requested
+  //   vision_wasm_nosimd_internal no-SIMD fallback       <- old browsers
+  //
+  // Which one loads is decided by how the package is imported, not by the
+  // browser, so the ES-module pair is dead weight in every single deploy —
+  // verified by recording the app's actual network requests: it fetches only
+  // vision_wasm_internal.{js,wasm} plus the model. Dropping it saves ~11MB.
+  //
+  // The no-SIMD pair IS kept: that choice is made at runtime from the browser's
+  // capabilities, and removing it would silently kill face tracking on Safari
+  // below 16.4 (WASM SIMD landed there in 2023).
+  //
+  // This matters beyond bandwidth: GitHub Pages' legacy build has a hard
+  // 10-minute ceiling, and at ~48MB this site started timing out against it.
+  const SKIP = /^vision_wasm_module_internal\./;
   if (await exists(SRC_WASM)) {
-    await cp(SRC_WASM, OUT_WASM, { recursive: true });
-    console.log("Copied MediaPipe WASM -> public/mediapipe/wasm");
+    await mkdir(OUT_WASM, { recursive: true });
+    let copied = 0;
+    let skipped = 0;
+    for (const entry of await readdir(SRC_WASM)) {
+      if (SKIP.test(entry)) {
+        skipped++;
+        continue;
+      }
+      await cp(join(SRC_WASM, entry), join(OUT_WASM, entry), {
+        recursive: true,
+      });
+      copied++;
+    }
+    // Purge anything a previous run already vendored, or the 11MB stays in
+    // public/ (and therefore in every export) despite no longer being copied.
+    let purged = 0;
+    for (const entry of await readdir(OUT_WASM)) {
+      if (SKIP.test(entry)) {
+        await rm(join(OUT_WASM, entry), { recursive: true, force: true });
+        purged++;
+      }
+    }
+    console.log(
+      `Copied ${copied} MediaPipe WASM files -> public/mediapipe/wasm ` +
+        `(skipped ${skipped} unused, purged ${purged} stale)`
+    );
   } else {
     console.warn("WASM source not found (is @mediapipe/tasks-vision installed?)");
   }

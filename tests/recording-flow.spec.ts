@@ -227,6 +227,31 @@ test("a stop that never drains still gives the take back", async ({ page }) => {
   await expect(page.locator("video[src^='blob:']")).toBeVisible();
 });
 
+test("the WebKit raw-mic path still records audio", async ({ page }) => {
+  // On WebKit a WebAudio-derived track records as silence, so iOS is given the
+  // original mic track instead. The WebKit defect itself cannot be reproduced
+  // in Chrome — what IS worth guarding is that the branch taken on an Apple
+  // user agent still produces a clip with sound, since it is a code path that
+  // no amount of testing here would otherwise ever execute.
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "userAgent", {
+      get: () =>
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+      configurable: true,
+    });
+  });
+
+  await liveVideoStage(page);
+  await setScript(page, SCRIPT);
+
+  const { bytes, b64 } = await recordAndRead(page, 4);
+  expect(summarizeMp4(new Uint8Array(bytes)).audio).not.toBeNull();
+
+  const peak = await audioPeak(page, b64);
+  expect(typeof peak, `audioPeak said: ${peak}`).toBe("number");
+  expect(peak as number, "clip must not be silent").toBeGreaterThan(0.01);
+});
+
 test("a clip that came back silent says so instead of pretending", async ({
   page,
 }) => {

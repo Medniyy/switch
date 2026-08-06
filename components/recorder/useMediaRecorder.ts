@@ -2,7 +2,11 @@
 
 import { RefObject, useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore, VIDEO_QUALITY } from "@/store/useAppStore";
-import { createBoostedMicTrack, type ProcessedMic } from "@/lib/audio";
+import {
+  createBoostedMicTrack,
+  webAudioTrackIsUnreliable,
+  type ProcessedMic,
+} from "@/lib/audio";
 import { startMp4Recording, type Mp4RecorderHandle } from "@/lib/mp4Recorder";
 
 export const MAX_SECONDS = 60;
@@ -237,20 +241,31 @@ export function useMediaRecorder(
         micTrack &&
         micTrack.readyState === "live"
       ) {
-        // Route the mic through our WebAudio boost/limiter so it records loud and
-        // clean like the native camera (see lib/audio.ts). The graph reads the
-        // live track without consuming it, so the preview's mic stays intact.
-        // Returns null when the audio context could not actually start, in which
-        // case the raw track is used — quieter, but audible, which the silent
-        // boosted graph would not have been.
-        const processed = await createBoostedMicTrack(micTrack);
-        if (processed) {
-          audioProcRef.current = processed;
-          tracks.push(processed.track);
+        // On WebKit a WebAudio-derived track records as pure silence, with
+        // every API involved reporting success — this is why iPhone clips came
+        // back with no sound and no warning. Hand MediaRecorder the ORIGINAL
+        // track there: no boost, no limiter, no clone, but actually audible.
+        // Not registered in micStreamRef, because that track belongs to the
+        // camera hook and stopping it would kill the live mic.
+        if (webAudioTrackIsUnreliable()) {
+          tracks.push(micTrack);
+          micStreamRef.current = null;
         } else {
-          const clone = micTrack.clone();
-          micStreamRef.current = new MediaStream([clone]);
-          tracks.push(clone);
+          // Route the mic through our WebAudio boost/limiter so it records loud
+          // and clean like the native camera (see lib/audio.ts). The graph reads
+          // the live track without consuming it, so the preview's mic stays
+          // intact. Returns null when the audio context could not actually
+          // start, in which case the raw track is used — quieter, but audible,
+          // which the silent boosted graph would not have been.
+          const processed = await createBoostedMicTrack(micTrack);
+          if (processed) {
+            audioProcRef.current = processed;
+            tracks.push(processed.track);
+          } else {
+            const clone = micTrack.clone();
+            micStreamRef.current = new MediaStream([clone]);
+            tracks.push(clone);
+          }
         }
       } else {
         micStreamRef.current = null;

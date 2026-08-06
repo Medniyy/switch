@@ -23,6 +23,31 @@ export const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   channelCount: 1,
 };
 
+/**
+ * Whether a WebAudio-derived MediaStreamTrack can be trusted to carry signal
+ * into MediaRecorder on this browser.
+ *
+ * On WebKit it cannot. A track taken off a MediaStreamAudioDestinationNode
+ * records as pure SILENCE on iOS — the graph runs, the context reports
+ * "running", the track reports "live", the recording succeeds, and the audio is
+ * simply not there. Nothing in the API reports a problem, which is why the
+ * resulting clip looks completely normal until someone plays it back.
+ *
+ * Every browser on iOS is WebKit, including Chrome, so this is a platform test
+ * and not a browser-brand test. Desktop Safari is included for the same engine.
+ */
+export function webAudioTrackIsUnreliable(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  const iOS =
+    /iP(hone|ad|od)/.test(ua) ||
+    // iPadOS reports itself as a Mac; touch points give it away.
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const desktopSafari =
+    /Safari/.test(ua) && !/Chrome|Chromium|Edg|OPR|CriOS|FxiOS/.test(ua);
+  return iOS || desktopSafari;
+}
+
 export interface ProcessedMic {
   /** Boosted/levelled audio track to feed the recorder. */
   track: MediaStreamTrack;

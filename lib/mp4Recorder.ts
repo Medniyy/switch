@@ -45,6 +45,10 @@ const KEYFRAME_SECONDS = 2;
  */
 const FLUSH_TIMEOUT_MS = 15_000;
 
+/** The startup probe encodes exactly one blank frame, so it should be near
+ *  instant. Anything slower than this is a broken encoder, not a busy one. */
+const VALIDATE_TIMEOUT_MS = 3_000;
+
 /** Resolve with `null` if `p` has not settled within `ms`. Rejections pass
  *  through untouched — a real error still deserves to be reported. */
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
@@ -139,6 +143,120 @@ export async function pickAvcCodec(
   return null;
 }
 
+/**
+ * Acceleration preferences to try, in order.
+ *
+ * "prefer-hardware" used to be requested outright, and on a machine whose
+ * hardware H.264 encoder cannot actually be created that produces the worst
+ * failure this recorder had: `isConfigSupported()` answers true, `configure()`
+ * does not throw, and the encoder only dies later through its async error
+ * callback — by which point the user has recorded a full take and every frame
+ * of it is gone. Chrome hits this where Brave does not, on the same machine.
+ *
+ * "no-preference" lets the browser use hardware when it genuinely works and
+ * software when it does not; the explicit software entry is the last resort.
+ */
+const ACCELERATION: HardwareAcceleration[] = [
+  "no-preference",
+  "prefer-software",
+];
+
+/**
+ * Actually encode a frame and flush it.
+ *
+ * This is the only honest test. Everything cheaper — isConfigSupported, a
+ * configure() that doesn't throw — reports success on configurations this
+ * machine cannot really encode, which is exactly how a broken engine got
+ * chosen and kept until stop. A throwaway encoder is used so nothing reaches
+ * the muxer. Costs one blank frame at startup.
+ */
+async function encoderWorks(
+  codec: string,
+  width: number,
+  height: number,
+  bitrate: number,
+  fps: number,
+  acceleration: HardwareAcceleration
+): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const done = (ok: boolean, enc?: VideoEncoder) => {
+      if (settled) return;
+      settled = true;
+      try {
+        enc?.close();
+      } catch {
+        /* already closed */
+      }
+      resolve(ok);
+    };
+
+    let enc: VideoEncoder;
+    try {
+      enc = new VideoEncoder({
+        output: () => {},
+        error: () => done(false),
+      });
+      enc.configure({
+        codec,
+        width,
+        height,
+        bitrate,
+        framerate: fps,
+        latencyMode: "quality",
+        hardwareAcceleration: acceleration,
+        avc: { format: "avc" },
+      });
+    } catch {
+      resolve(false);
+      return;
+    }
+
+    let frame: VideoFrame;
+    try {
+      const probe = document.createElement("canvas");
+      probe.width = width;
+      probe.height = height;
+      frame = new VideoFrame(probe, { timestamp: 0, duration: 1 });
+    } catch {
+      done(false, enc);
+      return;
+    }
+
+    try {
+      enc.encode(frame, { keyFrame: true });
+    } catch {
+      frame.close();
+      done(false, enc);
+      return;
+    }
+    frame.close();
+
+    // Bounded: an encoder wedged badly enough never to settle its flush must
+    // be treated as unusable, not waited on. withTimeout yields null on expiry.
+    withTimeout(enc.flush(), VALIDATE_TIMEOUT_MS)
+      .then((v) => done(v !== null, enc))
+      .catch(() => done(false, enc));
+  });
+}
+
+/** First acceleration mode that can really encode here, or null if none can —
+ *  in which case the whole job belongs to MediaRecorder. */
+async function pickAcceleration(
+  codec: string,
+  width: number,
+  height: number,
+  bitrate: number,
+  fps: number
+): Promise<HardwareAcceleration | null> {
+  for (const accel of ACCELERATION) {
+    if (await encoderWorks(codec, width, height, bitrate, fps, accel)) {
+      return accel;
+    }
+  }
+  return null;
+}
+
 /** Whether AAC encoding is available (audio is optional; video is not). */
 async function aacSupported(
   sampleRate: number,
@@ -178,6 +296,11 @@ export async function startMp4Recording(
 
   const codec = await pickAvcCodec(width, height, fps, bitrate);
   if (!codec) return null;
+
+  // Prove the encoder can encode BEFORE committing to this engine. Without
+  // this the failure lands at stop(), after a full take, with nothing to show.
+  const acceleration = await pickAcceleration(codec, width, height, bitrate, fps);
+  if (!acceleration) return null;
 
   // --- Audio first ---------------------------------------------------------
   // Set the mic up BEFORE the video clock starts. AudioWorklet.addModule is
@@ -289,7 +412,8 @@ export async function startMp4Recording(
       bitrate,
       framerate: fps,
       latencyMode: "quality",
-      hardwareAcceleration: "prefer-hardware",
+      // Whatever was proven to work above, never an untested preference.
+      hardwareAcceleration: acceleration,
       // AVCC (length-prefixed) is what an MP4 sample entry expects; Annex B
       // would produce a file no demuxer could read.
       avc: { format: "avc" },

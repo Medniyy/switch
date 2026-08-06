@@ -341,6 +341,13 @@ export function useMediaRecorder(
     const audioOn = useAppStore.getState().audioEnabled;
     const micTrack = audioOn ? (audioTrackRef?.current ?? null) : null;
 
+    // Sound is on but no live mic reached us: the clip WILL be silent. Say it
+    // now rather than after the take — the mp4 recorder's own "no sound" check
+    // only covers a mic that was present and then produced nothing.
+    if (audioOn && (!micTrack || micTrack.readyState !== "live")) {
+      setError("No microphone available — this clip will record silently.");
+    }
+
     // Engine 1: WebCodecs. Everything that can fail is probed inside, before any
     // frame is captured, so a `null` here costs the user nothing.
     let started = false;

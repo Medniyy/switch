@@ -133,14 +133,75 @@ test("stopping a teleprompter take yields a clip you can watch and save", async 
 // worse than no test. The guard it would have covered lives in lib/audio.ts and
 // needs a real device to exercise.
 
+test("an encoder that cannot really encode is rejected before recording", async ({
+  page,
+}) => {
+  // Reported from a real machine as "Recording could not be saved: Encoder
+  // creation error" — but only AFTER a full take, because isConfigSupported()
+  // answered true, configure() did not throw, and the encoder only died later
+  // through its async error callback. Chrome hit this where Brave did not.
+  // The engine must now prove itself on a real frame first and hand the job to
+  // MediaRecorder when it can't, so the user still gets their clip.
+  await page.addInitScript(() => {
+    if (typeof VideoEncoder === "undefined") return;
+    const realConfigure = VideoEncoder.prototype.configure;
+    VideoEncoder.prototype.configure = function (config: VideoEncoderConfig) {
+      realConfigure.call(this, config);
+      // Same shape as the real failure: accepted, then asynchronously dead.
+      setTimeout(() => {
+        const self = this as unknown as {
+          _cb?: (e: unknown) => void;
+        };
+        try {
+          self._cb?.(new Error("Encoder creation error."));
+        } catch {
+          /* ignore */
+        }
+      }, 0);
+    };
+    const RealEncoder = VideoEncoder;
+    window.VideoEncoder = class extends RealEncoder {
+      constructor(init: VideoEncoderInit) {
+        super(init);
+        (this as unknown as { _cb?: unknown })._cb = init.error;
+      }
+    } as unknown as typeof VideoEncoder;
+  });
+
+  await liveVideoStage(page);
+  await setScript(page, SCRIPT);
+
+  await page.getByLabel("Start recording").click();
+  await expect(page.getByLabel("Stop recording")).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.waitForTimeout(3000);
+  await page.getByLabel("Stop recording").click();
+
+  await expect(page.getByText("YOUR SWITCH IS READY")).toBeVisible({
+    timeout: 40_000,
+  });
+  await expect(page.locator("video[src^='blob:']")).toBeVisible();
+});
+
 test("a stop that never drains still gives the take back", async ({ page }) => {
   // flush() is not guaranteed to settle — a wedged hardware encoder leaves the
   // promise pending, which is neither resolve nor reject, so every caller just
   // waits forever. That is precisely the reported symptom: stop, and nothing at
   // all happens. Whatever already reached the muxer must still be finalized.
+  // Let the startup probe's flush succeed, then wedge the real one. An encoder
+  // that hangs from the very start is caught earlier now, by the probe, and
+  // handed to MediaRecorder — a different (also correct) path. The watchdog
+  // exists for the encoder that works at first and dies partway through.
   await page.addInitScript(() => {
     if (typeof VideoEncoder === "undefined") return;
-    VideoEncoder.prototype.flush = () => new Promise<void>(() => {});
+    const realFlush = VideoEncoder.prototype.flush;
+    let calls = 0;
+    VideoEncoder.prototype.flush = function () {
+      calls += 1;
+      if (calls <= 1) return realFlush.call(this);
+      return new Promise<void>(() => {});
+    };
   });
 
   await liveVideoStage(page);

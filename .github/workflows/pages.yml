@@ -1,0 +1,47 @@
+name: Publish to Pages
+
+# Manually triggered ONLY — never on push. The site is built LOCALLY (see
+# scripts/deploy.mjs: public/data/* and public/collections/* are generated
+# with the Helius/OpenSea keys in .env.local, which must never exist on
+# GitHub), and `npm run deploy` already pushes the finished build to the
+# `gh-pages` branch as a single orphan commit. This workflow's only job is to
+# take that already-built branch and hand it to GitHub Pages — no checkout of
+# source, no install, no build step, and no repo secrets involved.
+#
+# Why this exists instead of the classic branch-based Pages source: the
+# legacy Jekyll build pipeline has a hard 10-minute ceiling, and on
+# 2026-08-06 it started intermittently exceeding it for this repo (a plain
+# static site went from a historical ~25s build to 300-500s+ and several
+# outright failures) — nothing here got slower, GitHub's pipeline did.
+# actions/deploy-pages bypasses Jekyll entirely.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out the already-built site (gh-pages branch)
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Package it for Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Publish
+        id: deployment
+        uses: actions/deploy-pages@v4

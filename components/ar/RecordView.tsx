@@ -95,7 +95,7 @@ export function RecordView() {
   // Shared between the camera hook (which fills it) and the recorder (which reads
   // it). Owned here so we can also gate camera/mic acquisition below.
   const audioTrackRef = useRef<MediaStreamTrack | null>(null);
-  const { isRecording, elapsed, result, supported, start, stop, reset } =
+  const { isRecording, elapsed, result, error: recordError, supported, start, stop, reset } =
     useMediaRecorder(canvasRef, audioTrackRef);
 
   const [faceDetected, setFaceDetected] = useState(false);
@@ -579,6 +579,20 @@ export function RecordView() {
                 <SwitchCamera size={20} strokeWidth={2.5} />
               </button>
             )}
+          </div>
+        )}
+
+        {/* Recording problems. Shown whether or not a clip survived, and ABOVE
+            the result panel — a take that failed or came back silent used to
+            leave the recorder looking like the button had simply done nothing. */}
+        {recordError && !inEditor && (
+          <div
+            role="alert"
+            className="absolute inset-x-0 top-16 z-40 flex justify-center px-4"
+          >
+            <span className="max-w-sm border-[2px] border-pixelred bg-screen/90 px-3 py-2 text-center font-[family-name:var(--font-display)] text-[9px] leading-relaxed text-pixelred backdrop-blur-sm">
+              {recordError}
+            </span>
           </div>
         )}
 

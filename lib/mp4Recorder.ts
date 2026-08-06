@@ -56,9 +56,20 @@ export interface Mp4RecorderOptions {
   audioTrack: MediaStreamTrack | null;
 }
 
+export interface Mp4Result {
+  blob: Blob;
+  /**
+   * True when sound was asked for but the clip has none — the mic tap produced
+   * no samples, or the audio encoder failed. Worth surfacing: a silent clip
+   * looks completely normal until it is played back somewhere else, which is
+   * usually far too late to re-record.
+   */
+  audioDropped: boolean;
+}
+
 export interface Mp4RecorderHandle {
   /** Finish encoding and return the finished MP4. */
-  stop: () => Promise<Blob>;
+  stop: () => Promise<Mp4Result>;
   /** Abandon the recording and release everything. */
   cancel: () => void;
 }
@@ -150,15 +161,17 @@ export async function startMp4Recording(
 
   let muxer: Muxer<ArrayBufferTarget> | null = null;
   let videoEncoder: VideoEncoder | null = null;
-  let failed: Error | null = null;
+  // Tracked separately on purpose: losing the audio is a disappointment, losing
+  // the whole take is a disaster. Only a video failure is allowed to be fatal.
+  let videoFailed: Error | null = null;
+  let audioFailed: Error | null = null;
   let finished = false;
 
   const wantAudio = !!audioTrack && audioTrack.readyState === "live";
 
   try {
     if (wantAudio) {
-      if (await aacSupported(48_000, 1)) {
-        mic = await createBoostedMicPcm(audioTrack!, (channels, frames) => {
+      mic = await createBoostedMicPcm(audioTrack!, (channels, frames) => {
           const enc = audioEncoder;
           if (!enc || enc.state !== "configured" || finished) return;
           try {
@@ -182,9 +195,20 @@ export async function startMp4Recording(
             enc.encode(data);
             data.close();
           } catch (err) {
-            failed = err as Error;
+            audioFailed = err as Error;
           }
-        });
+      });
+
+      // ⚠️ Probe AAC at the rate we are ACTUALLY going to configure. The mic tap
+      // runs at the AudioContext's own sample rate, which is hardware-dependent
+      // (48 kHz on most phones, commonly 44.1 kHz on desktop). Probing a
+      // hardcoded 48 kHz and then configuring something else meant that on any
+      // device that disagreed, support was confirmed for a configuration we
+      // never used — and the real one failed asynchronously, through the error
+      // callback, long after we had committed to this engine.
+      if (mic && !(await aacSupported(mic.sampleRate, mic.numberOfChannels))) {
+        mic.close();
+        mic = null;
       }
 
       // The user asked for sound and we cannot encode it here — either AAC
@@ -220,11 +244,11 @@ export async function startMp4Recording(
         try {
           muxer?.addVideoChunk(chunk, meta);
         } catch (err) {
-          failed = err as Error;
+          videoFailed = err as Error;
         }
       },
       error: (err) => {
-        failed = err;
+        videoFailed = err;
       },
     });
     videoEncoder.configure({
@@ -246,11 +270,11 @@ export async function startMp4Recording(
           try {
             muxer?.addAudioChunk(chunk, meta);
           } catch (err) {
-            failed = err as Error;
+            audioFailed = err as Error;
           }
         },
         error: (err) => {
-          failed = err;
+          audioFailed = err;
         },
       });
       audioEncoder.configure({
@@ -311,7 +335,7 @@ export async function startMp4Recording(
   const tick = (now: number) => {
     raf = requestAnimationFrame(tick);
     const enc = videoEncoder;
-    if (!enc || enc.state !== "configured" || finished || failed) return;
+    if (!enc || enc.state !== "configured" || finished || videoFailed) return;
 
     const target = Math.floor((now - started) / (1000 / fps));
     if (target <= lastIndex) return;
@@ -323,7 +347,7 @@ export async function startMp4Recording(
         duration: frameDurationUs,
       });
     } catch (err) {
-      failed = err as Error;
+      videoFailed = err as Error;
       return;
     }
 
@@ -348,7 +372,7 @@ export async function startMp4Recording(
         if (frame !== base) frame.close();
       }
     } catch (err) {
-      failed = err as Error;
+      videoFailed = err as Error;
     } finally {
       base.close();
     }
@@ -374,18 +398,34 @@ export async function startMp4Recording(
       if (finished) throw new Error("recording already finished");
       teardown();
       try {
+        // Audio is best-effort from here on. A failed audio flush used to reject
+        // the whole stop(), which threw away a perfectly good video track and
+        // left the user with nothing at all — the worst possible outcome, and
+        // the one hardest to explain. Whatever audio made it into the muxer is
+        // kept; the rest is dropped silently in favour of saving the take.
         if (audioEncoder && audioEncoder.state === "configured") {
-          await audioEncoder.flush();
+          try {
+            await audioEncoder.flush();
+          } catch (err) {
+            audioFailed = err as Error;
+          }
         }
         if (videoEncoder && videoEncoder.state === "configured") {
           await videoEncoder.flush();
         }
-        if (failed) throw failed;
+        // Only a video failure is fatal: with no picture there is no clip.
+        if (videoFailed) throw videoFailed;
         if (!muxer) throw new Error("muxer missing");
         muxer.finalize();
         const { buffer } = muxer.target as ArrayBufferTarget;
         if (!buffer) throw new Error("muxer produced no output");
-        return new Blob([buffer], { type: "video/mp4" });
+        return {
+          blob: new Blob([buffer], { type: "video/mp4" }),
+          // `audioFrames === 0` is the important half: a mic tap that never
+          // pulled (a suspended AudioContext, say) reports no error at all, it
+          // just quietly delivers nothing. Only an error check would miss it.
+          audioDropped: wantAudio && (audioFailed !== null || audioFrames === 0),
+        };
       } finally {
         try {
           audioEncoder?.close();

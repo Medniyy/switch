@@ -47,9 +47,9 @@ export interface ProcessedMic {
  * Returns null if WebAudio is unavailable, so the caller can fall back to the raw
  * mic track.
  */
-export function createBoostedMicTrack(
+export async function createBoostedMicTrack(
   micTrack: MediaStreamTrack
-): ProcessedMic | null {
+): Promise<ProcessedMic | null> {
   try {
     const Ctx =
       typeof window !== "undefined"
@@ -60,8 +60,17 @@ export function createBoostedMicTrack(
     if (!Ctx) return null;
 
     const ctx = new Ctx();
-    // Created on the record tap (a user gesture), so resume is permitted.
-    ctx.resume?.().catch(() => {});
+    // ⚠️ The resume MUST be awaited and its result checked. A suspended context
+    // still hands back a perfectly valid-looking MediaStreamDestination track —
+    // it just emits pure silence — so skipping this check doesn't fail loudly,
+    // it ships a recording with no sound. That is exactly what happened once the
+    // 3-2-1 lead-in moved start() off the record tap: on stricter (mobile)
+    // autoplay policies the context never left "suspended".
+    await ctx.resume?.().catch(() => {});
+    if (ctx.state !== "running") {
+      ctx.close().catch(() => {});
+      return null; // caller falls back to the raw mic track, which is audible
+    }
 
     const source = ctx.createMediaStreamSource(new MediaStream([micTrack]));
     const gain = ctx.createGain();
@@ -183,7 +192,14 @@ export async function createBoostedMicPcm(
       ctx.close().catch(() => {});
       return null;
     }
+    // Same rule as createBoostedMicTrack: a suspended context never pulls the
+    // worklet, so onPcm would simply never fire and the clip would come out
+    // silent with nothing anywhere reporting a problem.
     await ctx.resume?.().catch(() => {});
+    if (ctx.state !== "running") {
+      ctx.close().catch(() => {});
+      return null;
+    }
 
     const url = URL.createObjectURL(
       new Blob([PCM_TAP_WORKLET], { type: "application/javascript" })

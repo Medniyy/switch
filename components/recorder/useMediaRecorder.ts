@@ -118,6 +118,11 @@ export function useMediaRecorder(
   const [isRecording, setIsRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [result, setResult] = useState<RecordingResult | null>(null);
+  // A recording that fails must SAY so. Previously a rejected encoder flush was
+  // swallowed by an empty catch, so tapping stop simply dropped the take and
+  // returned to the live camera with no preview, no file and no explanation —
+  // indistinguishable, from the user's side, from the button not working.
+  const [error, setError] = useState<string | null>(null);
   const [supported] = useState(
     () => pickMimeType() !== null || typeof VideoEncoder !== "undefined"
   );
@@ -158,11 +163,27 @@ export function useMediaRecorder(
       setElapsed(0);
       mp4
         .stop()
-        .then((blob) => publish(blob, "mp4"))
-        .catch(() => {
-          /* encoder failed after the fact — nothing to publish */
+        .then(({ blob, audioDropped }) => {
+          if (blob.size === 0) {
+            setError("The recording came back empty. Please try again.");
+            return;
+          }
+          if (audioDropped) {
+            setError("Saved, but this clip has no sound — the mic didn't reach the recording.");
+          }
+          publish(blob, "mp4");
+        })
+        .catch((err: unknown) => {
+          setError(
+            `Recording could not be saved: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
         })
         .finally(() => {
+          // The mic graph is owned per-recording; without this it stayed open
+          // after every WebCodecs take (only the fallback path tore it down).
+          stopMic();
           stoppingRef.current = false;
         });
       return;
@@ -174,11 +195,11 @@ export function useMediaRecorder(
     } else {
       stoppingRef.current = false;
     }
-  }, [clearTimers, publish]);
+  }, [clearTimers, publish, stopMic]);
 
   /** Legacy engine: canvas.captureStream + MediaRecorder. */
   const startFallback = useCallback(
-    (canvas: HTMLCanvasElement, bitrate: number) => {
+    async (canvas: HTMLCanvasElement, bitrate: number) => {
       // Prefer manual frame control (captureStream(0) + requestFrame): the auto
       // pacer freezes on iOS Safari mid-recording. Fall back to a paced stream
       // where requestFrame isn't available.
@@ -213,7 +234,10 @@ export function useMediaRecorder(
         // Route the mic through our WebAudio boost/limiter so it records loud and
         // clean like the native camera (see lib/audio.ts). The graph reads the
         // live track without consuming it, so the preview's mic stays intact.
-        const processed = createBoostedMicTrack(micTrack);
+        // Returns null when the audio context could not actually start, in which
+        // case the raw track is used — quieter, but audible, which the silent
+        // boosted graph would not have been.
+        const processed = await createBoostedMicTrack(micTrack);
         if (processed) {
           audioProcRef.current = processed;
           tracks.push(processed.track);
@@ -297,6 +321,7 @@ export function useMediaRecorder(
     // Defensive: kill any timer left over from a prior session before we start
     // a new one, so a stale interval can't keep driving `elapsed`.
     clearTimers();
+    setError(null);
 
     // Free any prior recording.
     setResult((prev) => {
@@ -328,8 +353,11 @@ export function useMediaRecorder(
     }
 
     // Engine 2: MediaRecorder.
-    if (!started) started = startFallback(canvas, preset.bitrate);
-    if (!started) return;
+    if (!started) started = await startFallback(canvas, preset.bitrate);
+    if (!started) {
+      setError("This browser could not start a recording.");
+      return;
+    }
 
     setIsRecording(true);
     setElapsed(0);
@@ -347,6 +375,7 @@ export function useMediaRecorder(
       return null;
     });
     setElapsed(0);
+    setError(null);
   }, []);
 
   useEffect(() => {
@@ -360,5 +389,5 @@ export function useMediaRecorder(
     };
   }, [clearTimers, stopMic]);
 
-  return { isRecording, elapsed, result, supported, start, stop, reset };
+  return { isRecording, elapsed, result, error, supported, start, stop, reset };
 }

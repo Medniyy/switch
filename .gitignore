@@ -67,3 +67,6 @@ next-env.d.ts
 /scripts/v4/
 /scripts/mask/
 /scripts/build-test-batch.ts
+
+# Local prototype scratch (model experiments, sample tokens)
+/.proto/

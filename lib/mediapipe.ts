@@ -32,6 +32,11 @@ export function loadFaceLandmarker(): Promise<FaceLandmarker> {
       },
       runningMode: "VIDEO",
       numFaces: 1,
+      // ARKit-style expression coefficients (jawOpen, eyeBlinkLeft/Right, …).
+      // These drive the worn PFP's idle animation — see lib/headAnimation.ts.
+      // They come from an extra head on the same model rather than a second
+      // inference pass, so the cost is small relative to landmarking itself.
+      outputFaceBlendshapes: true,
     });
   })().catch((err) => {
     // Reset so a later retry can re-attempt the load.

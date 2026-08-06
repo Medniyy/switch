@@ -38,6 +38,20 @@ export function MaskSettings() {
         onChange={(v) => setMask({ sizeOffset: v })}
       />
 
+      {/* Idle animation. A slider, not a switch: how much motion reads as
+          "alive" rather than "distracting" is personal, and 0 turns it off
+          exactly for anyone who wants the mask dead still. */}
+      <Slider
+        label={`LIVELINESS · ${
+          mask.liveliness === 0 ? "OFF" : `${Math.round(mask.liveliness * 100)}%`
+        }`}
+        min={0}
+        max={1}
+        step={0.05}
+        value={mask.liveliness}
+        onChange={(v) => setMask({ liveliness: v })}
+      />
+
       <div>
         <p className="font-[family-name:var(--font-display)] text-[9px] text-cream/50 mb-1">
           QUALITY

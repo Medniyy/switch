@@ -10,6 +10,11 @@ export interface MaskSettings {
   blend: BlendMode;
   shape: MaskShape; // round (default) softens the sharp square PFP corners
   removeBg: boolean; // chroma-key the PFP's flat background away
+  /** Idle "liveliness": breathing, plus squash/stretch driven by the wearer's
+   *  own mouth and blinks (see lib/headAnimation.ts). 0 disables it entirely,
+   *  1 is the tuned default. A slider rather than a switch because how much
+   *  motion reads as "alive" versus "distracting" is genuinely personal. */
+  liveliness: number; // 0..1
 }
 
 /** What the shutter produces. */
@@ -62,6 +67,7 @@ const DEFAULT_MASK: MaskSettings = {
   blend: "source-over", // only Normal is used; no blend picker in the UI
   shape: "round",
   removeBg: true, // cut the PFP background by default
+  liveliness: 1, // on by default — "it feels bland" was the complaint
 };
 
 export const useAppStore = create<AppState>((set) => ({

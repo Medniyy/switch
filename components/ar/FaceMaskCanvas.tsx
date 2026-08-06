@@ -15,6 +15,12 @@ import {
 } from "@/lib/imageUtils";
 import type { MaskFit } from "@/lib/userMasks";
 import { BananaField } from "@/lib/bananaRain";
+import {
+  computeIdleMotion,
+  expressionFromBlendshapes,
+  NEUTRAL_EXPRESSION,
+  type LiveExpression,
+} from "@/lib/headAnimation";
 import { useAppStore, VIDEO_QUALITY } from "@/store/useAppStore";
 
 /** The mask draw of the most recent live frame, in CANVAS pixel space (pre-
@@ -149,6 +155,8 @@ export function FaceMaskCanvas({
       rollCoverageScale,
       applyMaskFit,
       BASE_COVERAGE_SCALE,
+      computeIdleMotion,
+      expressionFromBlendshapes,
     };
   }, []);
 
@@ -195,11 +203,16 @@ export function FaceMaskCanvas({
 
       // Detect face landmarks for this frame.
       let landmarks: { x: number; y: number }[] | null = null;
+      let expression: LiveExpression = NEUTRAL_EXPRESSION;
       const lm = landmarkerRef.current;
       if (lm) {
         try {
           const result = lm.detectForVideo(video, performance.now());
           if (result.faceLandmarks?.length) landmarks = result.faceLandmarks[0];
+          // Blendshapes ride along with the same inference (see lib/mediapipe).
+          expression = expressionFromBlendshapes(
+            result.faceBlendshapes?.[0]?.categories
+          );
         } catch {
           /* detector not ready for this frame — skip */
         }
@@ -212,7 +225,7 @@ export function FaceMaskCanvas({
       }
 
       const now = performance.now();
-      const { opacity, sizeOffset, blend } = maskRef.current;
+      const { opacity, sizeOffset, blend, liveliness } = maskRef.current;
       const cameraMirror = cameraMirrorRef.current;
       const maskFlip = maskFlipRef.current;
       const fit = fitRef.current;
@@ -279,16 +292,26 @@ export function FaceMaskCanvas({
           const coverage =
             BASE_COVERAGE_SCALE * rollCoverageScale(smoothed.rotation);
           const dw = smoothed.drawWidth * coverage;
+          // Idle life: a slow breathing bob plus squash/stretch driven by the
+          // wearer's own mouth and blinks. Applied as a transform around the
+          // facial anchor, so it needs nothing at all about the artwork and
+          // cannot distort a PFP the way a mis-detected feature would.
+          const motion = computeIdleMotion(now, dw, expression, liveliness);
           ctx.save();
-          ctx.translate(smoothed.centerX, smoothed.centerY);
+          ctx.translate(smoothed.centerX, smoothed.centerY + motion.offsetY);
           ctx.rotate(smoothed.rotation);
           if (maskFlip) ctx.scale(-1, 1);
+          ctx.scale(motion.scaleX, motion.scaleY);
           ctx.drawImage(img, -anchorX * dw, -(anchorY + MASK_UP_NUDGE) * dw, dw, dw);
           ctx.restore();
           if (trackRef) {
             trackRef.current = {
               centerX: smoothed.centerX,
-              centerY: smoothed.centerY,
+              // Carry the breathing offset so a photo taken mid-bob seeds the
+              // editor where the mask actually was. The squash/stretch is NOT
+              // reflected — the editor's slot is a uniform square — but at these
+              // amplitudes that is a sub-pixel difference on a still frame.
+              centerY: smoothed.centerY + motion.offsetY,
               drawWidth: dw,
               rotation: smoothed.rotation,
               anchorX,

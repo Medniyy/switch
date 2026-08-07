@@ -36,6 +36,7 @@ import {
   blobToImage,
   exportTransparentCanvas,
   loadImage,
+  loadSavedMask,
   nftMaskKey,
   saveUserMask,
   USER_MASK_VERSION,
@@ -51,6 +52,9 @@ import { useNFTImage } from "@/components/ar/useNFTImage";
 import { FaceMaskCanvas } from "@/components/ar/FaceMaskCanvas";
 import { PixelButton } from "@/components/ui/PixelButton";
 import { useIsDesktop } from "@/lib/useMediaQuery";
+
+/** How long after a save the background anchor auto-detection kicks off. */
+const ANCHOR_DETECT_DELAY_MS = 4000;
 
 type PrepTool = "erase" | "restore";
 type BrushPreset = "small" | "medium" | "large";
@@ -191,14 +195,6 @@ export function MaskPreparationFlow({
     async ({ blob, type, image, maskMode, maskFlip, fit }: EditorCompletePayload) => {
       const now = Date.now();
       const key = nftMaskKey(nft);
-      // Find the ART's own eyes/mouth for the T2 mouth/blink imitation.
-      // Best-effort and re-run on every save (the user may have erased or
-      // restored the face region since last time). Manual pins survive only
-      // when auto-detection finds nothing to replace them with.
-      const faceAnchors =
-        (await detectFaceAnchors(image).catch(() => null)) ??
-        existingRecord?.faceAnchors ??
-        null;
       const record: SavedUserMask = {
         key,
         collectionId: nft.collection,
@@ -213,20 +209,51 @@ export function MaskPreparationFlow({
         anchorOffsetY: fit.anchorOffsetY,
         scaleOffset: fit.scaleOffset,
         placement: starting.placement,
-        faceAnchors,
+        faceAnchors: existingRecord?.faceAnchors ?? null,
         createdAt: existingRecord?.createdAt ?? now,
         updatedAt: now,
         version: USER_MASK_VERSION,
       };
 
+      let persisted = true;
       try {
         await saveUserMask(record);
         onComplete({ record, image, persisted: true });
       } catch {
+        persisted = false;
         const warning =
           "Saved for this session. Browser storage is full or unavailable, so you may need to prepare it again next time.";
         setStorageWarning(warning);
         onComplete({ record, image, persisted: false, warning });
+      }
+
+      // Find the ART's own eyes/mouth for the T2 mouth/blink imitation —
+      // AFTER the user is already wearing the mask, never blocking the save:
+      // the first detection loads a second landmarker (wasm + model), which
+      // costs seconds on a phone, and "keep it whole" must not freeze for
+      // it. Delayed past the stage swap so the recorder's steady-state loop
+      // isn't competing with a model load the moment it appears; written
+      // through only if the record hasn't changed meanwhile, so it can never
+      // clobber pins the user placed (or an explicit "no face") in between.
+      // Picked up the next time the mask loads; FACE PINS' auto-detect gives
+      // it immediately on demand.
+      if (persisted && !record.faceAnchors) {
+        window.setTimeout(() => {
+          void detectFaceAnchors(image)
+            .then(async (anchors) => {
+              if (!anchors) return;
+              const current = await loadSavedMask(key);
+              if (!current || current.updatedAt !== record.updatedAt) return;
+              await saveUserMask({
+                ...current,
+                faceAnchors: anchors,
+                updatedAt: Date.now(),
+              });
+            })
+            .catch(() => {
+              /* best-effort by design */
+            });
+        }, ANCHOR_DETECT_DELAY_MS);
       }
     },
     [

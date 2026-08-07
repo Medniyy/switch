@@ -84,16 +84,20 @@ test("a keyable collection still gets the automatic cutout", async ({ page }) =>
   expect(corner!.a).toBe(0);
 });
 
-test("sensei skips the cutout and seeds the untouched artwork", async ({ page }) => {
+test("sensei is keyed automatically like every other collection", async ({ page }) => {
+  // Sensei used to be opted OUT of the cutout (autoCutout: false) because the
+  // old colour-distance key could not separate a black-robed panda from a
+  // near-black backdrop — it ate the character. The matte judges edges by
+  // relative contrast now, so that art keys like anything else and no
+  // collection needs an escape hatch. This test exists to keep the escape
+  // hatch from creeping back in.
   await gotoRecord(page);
   await selectKeyableNFT(page, SENSEI);
   await openEditor(page);
 
-  // No key, no crop: the full 300×300 art, background intact.
-  expect(await sideOf(page)).toBe(300);
+  expect(await sideOf(page)).toBeLessThan(300); // cropped to the subject
   const corner = await editPixel(page, 1, 1);
-  expect(corner!.a).toBe(255);
-  expect(corner!.b).toBeGreaterThan(corner!.r); // still the blue backdrop
+  expect(corner!.a).toBe(0); // backdrop gone
 });
 
 test("'Bring back full artwork' restores the background for hand-erasing", async ({

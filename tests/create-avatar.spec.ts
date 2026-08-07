@@ -6,12 +6,12 @@ import sharp from "sharp";
  * into the same IndexedDB store as every collection mask → worn in /record →
  * listed (and deletable) on return.
  *
- * The uploaded fixture is a flat synthetic image with NO person in it, which
- * pins the honest fallback path: the segmenter must decline (keep the
- * original) rather than hallucinate a cutout — and the flow must still work
- * end to end. The person-found path differs only in alpha content and is a
- * model-behaviour question, not a flow one; it needs a real photo and a real
- * device (Vali's job, not headless Chrome's).
+ * The fixture is a shape on a flat backdrop, which is the geometric matte's
+ * home turf — so this also pins that a custom upload goes through the SAME
+ * pipeline as collection art (lib/prepareArtwork.ts) rather than being
+ * special-cased into the person segmenter. How well the ML stage reads an
+ * actual portrait is a model question needing a real photo on a real device,
+ * not something headless Chrome can answer.
  */
 
 async function fixturePng(): Promise<Buffer> {
@@ -40,8 +40,9 @@ test("upload → wear → persisted on device → delete", async ({ page }) => {
     buffer: await fixturePng(),
   });
 
-  // No person in the fixture → the flow must say so and keep the original.
-  await expect(page.getByText(/No person found/i)).toBeVisible({
+  // The backdrop is flat, so the matte separates the shape automatically —
+  // no button-hunting required, which is the whole point of the UX.
+  await expect(page.getByText(/Background removed/i)).toBeVisible({
     timeout: 60_000,
   });
   await page.getByRole("button", { name: "WEAR IT" }).click();
@@ -71,7 +72,10 @@ test("upload → wear → persisted on device → delete", async ({ page }) => {
       .map((r) => ({ key: r.key, size: r.editedMaskBlob?.size ?? 0 }));
   });
   expect(stored.length).toBe(1);
-  expect(stored[0].size).toBeGreaterThan(1000);
+  // Just "a real bitmap got stored". Deliberately loose: now that the matte
+  // runs on uploads too, what lands here is a cut-out shape on transparency,
+  // which compresses far smaller than the original photo did.
+  expect(stored[0].size).toBeGreaterThan(200);
 
   // Back on /create it is listed — the "see them again" half of the promise.
   await page.goto("/create");

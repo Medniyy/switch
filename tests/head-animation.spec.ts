@@ -170,8 +170,11 @@ test("an open jaw drops the chin, bounded and scaled by liveliness", async ({
   ])) as { drop: number };
   expect(full.drop).toBeGreaterThan(0);
   expect(half.drop).toBeCloseTo(full.drop / 2, 5);
-  // Restraint: the drop stays a small fraction of the mask, never a caricature.
-  expect(full.drop).toBeLessThan(400 * 0.12);
+  // Restraint, but visible: big enough to read on camera without turning the
+  // face into a caricature. (Raised with JAW_DROP_FRAC — at the old amplitude
+  // the mouth technically moved and nobody could tell.)
+  expect(full.drop).toBeGreaterThan(400 * 0.1);
+  expect(full.drop).toBeLessThan(400 * 0.22);
 });
 
 test("a mouth pinned near the bitmap edge still yields sane slices", async ({
@@ -192,13 +195,14 @@ test("eyelids stay open through idle noise and close on a real blink", async ({
   page,
 }) => {
   await seam(page);
-  // Idle eyes hover around 0.1–0.25 on the raw blendshape; lids must not
-  // flutter there.
-  for (const idle of [0, 0.1, 0.25]) {
+  // Idle eyes hover low on the raw blendshape; lids must not flutter there.
+  // The dead zone tightened to 0.22 so a real (fast) blink actually closes
+  // the lid, so idle is checked below that.
+  for (const idle of [0, 0.1, 0.2]) {
     expect((await call(page, "lidClose", [idle])) as number).toBe(0);
   }
-  expect((await call(page, "lidClose", [0.8])) as number).toBe(1);
-  const mid = (await call(page, "lidClose", [0.5])) as number;
+  expect((await call(page, "lidClose", [0.6])) as number).toBe(1);
+  const mid = (await call(page, "lidClose", [0.35])) as number;
   expect(mid).toBeGreaterThan(0);
   expect(mid).toBeLessThan(1);
 });

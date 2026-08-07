@@ -214,10 +214,14 @@ export class CakeGame {
     const enter =
       this.phase === "enter" ? 1 - Math.pow(1 - this.phaseT / ENTER_MS, 3) : 1;
 
-    const cakeW = Math.min(w * 0.46, h * 0.4);
+    const cakeW = Math.min(w * 0.4, h * 0.34);
     const cakeH = cakeW * 0.52;
     const cx = w / 2;
-    const baseY = h + cakeH * (1 - enter) - h * 0.02;
+    // Sits at chest height, not on the floor of the frame: the bottom of the
+    // screen belongs to the shutter and the mode switch, and a cake tucked
+    // behind those reads as scenery rather than as something to play with.
+    const restY = h * 0.72;
+    const baseY = restY + (h - restY + cakeH) * (1 - enter);
     const topY = baseY - cakeH; // top surface of the upper tier
 
     ctx.save();

@@ -26,7 +26,7 @@ import { FaceMaskCanvas, type LiveMaskTrack } from "./FaceMaskCanvas";
 import { MASK_UP_NUDGE } from "@/lib/imageUtils";
 import { MaskSettings, MaskQuickToggles } from "./MaskControls";
 import { ExpressionPinsSheet } from "./ExpressionPinsSheet";
-import type { FaceAnchors } from "@/lib/faceAnchors";
+import { resolveFaceAnchors, type FaceAnchors } from "@/lib/faceAnchors";
 import { RecordButton } from "./RecordButton";
 import { useMediaRecorder } from "@/components/recorder/useMediaRecorder";
 import { VideoPreview } from "@/components/recorder/VideoPreview";
@@ -217,6 +217,32 @@ export function RecordView() {
         rememberLastMask(saved.key);
         setRuntimeMask({ record: saved, image, persisted: true });
         setMaskLoadStatus("ready");
+
+        // Backfill face anchors for masks saved before they existed (or
+        // whose detection came back empty, which on stylised art is most of
+        // them). Without this the mouth/blink animation stays switched off
+        // for every PFP already on the device until it is prepared again,
+        // which is precisely how the feature came to look like it was never
+        // wired up. Runs after the mask is already on screen and writes
+        // through only if nothing else changed the record meanwhile.
+        if (!saved.faceAnchors) {
+          void resolveFaceAnchors(image)
+            .then(async (anchors) => {
+              if (cancelled || !anchors) return;
+              const current = await loadSavedMask(key);
+              if (!current || current.updatedAt !== saved.updatedAt) return;
+              const next = { ...current, faceAnchors: anchors, updatedAt: Date.now() };
+              setRuntimeMask((prev) =>
+                prev && prev.record.key === key ? { ...prev, record: next } : prev
+              );
+              await saveUserMask(next).catch(() => {
+                /* animation already live this session; storage can retry */
+              });
+            })
+            .catch(() => {
+              /* best-effort */
+            });
+        }
       } catch {
         if (cancelled) return;
         setMaskLoadStatus("error");
@@ -933,6 +959,20 @@ export function RecordView() {
                 </span>
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Birthday-game instructions. DOM, never canvas: anything painted
+            into the compositing canvas is inside the recorded clip, and this
+            is guidance for the person holding the phone, not part of their
+            take (same rule as the teleprompter). Without it the cake just
+            appears and nobody knows it is a game. */}
+        {birthdayCake && !anyResult && !inEditor && (
+          <div className="pointer-events-none absolute inset-x-0 top-16 z-30 flex justify-center px-4">
+            <span className="flex items-center gap-2 rounded-full border-[2px] border-banana/60 bg-screen/80 px-4 py-2 text-center font-[family-name:var(--font-display)] text-[10px] leading-tight text-banana backdrop-blur-sm">
+              <Cake size={14} strokeWidth={2.5} />
+              OPEN YOUR MOUTH WIDE TO BLOW OUT THE CANDLES
+            </span>
           </div>
         )}
 

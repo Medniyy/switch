@@ -282,34 +282,15 @@ export function FaceMaskCanvas({
       // the app has no live person segmentation). Drawn OVER the camera frame but
       // UNDER the avatar mask so it never covers the wearer's face. Runs only
       // while enabled; time-stepped so fall speed is frame-rate stable.
+      // ONE delta per frame, shared by every time-stepped effect. The cake is
+      // drawn much later in the frame (it is the frontmost layer), so it must
+      // not recompute this against an already-updated lastFrameRef — that
+      // yields dt=0 forever and freezes the game mid-animation.
+      const frameDt = lastFrameRef.current ? now - lastFrameRef.current : 16;
       if (bananaRainRef.current) {
         if (!bananaFieldRef.current) bananaFieldRef.current = new BananaField();
-        const dt = lastFrameRef.current ? now - lastFrameRef.current : 16;
-        bananaFieldRef.current.update(dt, w, h);
+        bananaFieldRef.current.update(frameDt, w, h);
         bananaFieldRef.current.draw(ctx);
-      }
-      // Birthday cake game (MonkeyDAO, SMB's 5th): same layer rules as the
-      // bananas — over the camera, under the avatar, inside the recording.
-      // The wearer's live jawOpen is the game input (blowing the candles).
-      //
-      // ⚠️ Drawn with the camera mirror UNDONE (applying the same flip twice
-      // is the identity). The cake carries a numeral "5", and inside the
-      // mirrored context that renders backwards — in the preview and in the
-      // exported clip. The bananas never exposed this because they're
-      // symmetric; anything with text or a digit must cancel the mirror.
-      // Done here rather than after ctx.restore() so the cake keeps its
-      // z-order: over the camera frame, under the avatar.
-      if (birthdayCakeRef.current) {
-        if (!cakeGameRef.current) cakeGameRef.current = new CakeGame();
-        const dt = lastFrameRef.current ? now - lastFrameRef.current : 16;
-        cakeGameRef.current.update(dt, w, h, expression.jawOpen);
-        ctx.save();
-        if (cameraMirror) {
-          ctx.translate(w, 0);
-          ctx.scale(-1, 1);
-        }
-        cakeGameRef.current.draw(ctx);
-        ctx.restore();
       }
       lastFrameRef.current = now;
 
@@ -441,6 +422,23 @@ export function FaceMaskCanvas({
         ctx.globalCompositeOperation = "source-over";
       }
       ctx.restore();
+
+      // --- Birthday cake game (MonkeyDAO, SMB's 5th) -------------------------
+      // Drawn AFTER ctx.restore(), so it is (a) in true screen space, never
+      // mirrored — the numeral "5" reads as a 5 — and (b) the FRONTMOST layer,
+      // in front of the wearer and their avatar.
+      //
+      // It used to sit under the avatar, next to the bananas, and the bug that
+      // exposed the difference was simple: lean toward the camera and your own
+      // head covered the cake, because the mask is drawn over you and the cake
+      // was drawn under it. Bananas can live behind you; a thing you are
+      // supposed to interact with cannot, or it reads as being in another room.
+      // The wearer's live jawOpen is the game input (blowing the candles out).
+      if (birthdayCakeRef.current) {
+        if (!cakeGameRef.current) cakeGameRef.current = new CakeGame();
+        cakeGameRef.current.update(frameDt, w, h, expression.jawOpen);
+        cakeGameRef.current.draw(ctx);
+      }
 
       // --- Dev debug overlay on a SEPARATE canvas (never recorded/captured) ---
       const dbg = debugCanvasRef.current;

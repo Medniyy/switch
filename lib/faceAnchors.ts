@@ -138,6 +138,92 @@ export function anchorsWithLidColors(
   });
 }
 
+/**
+ * Where a PFP's face sits when we could not detect one — which is the NORMAL
+ * case, not the exception.
+ *
+ * `detectFaceAnchors` runs the HUMAN face landmarker over stylised art, and
+ * on a pixel monkey, a clay dinosaur or a penguin it finds nothing at all.
+ * That left `faceAnchors` null on nearly every mask, and null anchors switch
+ * the whole mouth/blink animation off — which is exactly why the feature
+ * shipped invisible.
+ *
+ * So we estimate instead. Find the artwork's opaque bounding box (after the
+ * background is gone, that IS the character), assume the head occupies the
+ * upper part of it, and place eyes and mouth at the canonical fractions that
+ * PFP art overwhelmingly follows — front-facing bust, eyes above the middle,
+ * mouth below them. It is an approximation, and being slightly off reads as
+ * the whole face region moving, which still sells the expression; being
+ * absent reads as nothing happening at all.
+ *
+ * Users who want it exact drag the pins (ExpressionPinsSheet), and users whose
+ * art has no face at all can say so there and switch it back off.
+ */
+export function estimateFaceAnchors(
+  image: HTMLImageElement | HTMLCanvasElement
+): FaceAnchors | null {
+  const size = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(image, 0, 0, size, size);
+
+  let minX = size,
+    minY = size,
+    maxX = -1,
+    maxY = -1;
+  try {
+    const { data } = ctx.getImageData(0, 0, size, size);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        if (data[(y * size + x) * 4 + 3] > 24) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+  } catch {
+    return null; // tainted canvas
+  }
+  if (maxX < minX || maxY < minY) return null;
+
+  const bx = minX / size;
+  const by = minY / size;
+  const bw = (maxX - minX) / size;
+  const bh = (maxY - minY) / size;
+  if (bw < 0.15 || bh < 0.15) return null; // too little art to place a face on
+
+  // The head is the upper portion of the subject; for a tightly-cropped head
+  // mask that is the whole thing, and these fractions still land sensibly.
+  const headH = bh * 0.72;
+  const cx = bx + bw / 2;
+  const eyeY = by + headH * 0.46;
+  const mouthY = by + headH * 0.72;
+  const eyeDx = bw * 0.17;
+
+  return anchorsWithLidColors(image, {
+    eyeL: { x: cx - eyeDx, y: eyeY },
+    eyeR: { x: cx + eyeDx, y: eyeY },
+    mouth: { x: cx, y: mouthY },
+  });
+}
+
+/**
+ * The anchors to use for a mask: detected if the art really does read as a
+ * face, estimated otherwise. Only returns null when even the estimate has
+ * nothing to work with (an empty bitmap).
+ */
+export async function resolveFaceAnchors(
+  image: HTMLImageElement | HTMLCanvasElement
+): Promise<FaceAnchors | null> {
+  const detected = await detectFaceAnchors(image).catch(() => null);
+  return detected ?? estimateFaceAnchors(image);
+}
+
 // ---------------------------------------------------------------------------
 // Auto-detection (IMAGE mode)
 

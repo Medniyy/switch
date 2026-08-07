@@ -45,7 +45,8 @@ import {
   type SavedUserMask,
 } from "@/lib/userMasks";
 import { usesAutoCutout } from "@/lib/collections";
-import { detectFaceAnchors } from "@/lib/faceAnchors";
+import { prepareArtwork } from "@/lib/prepareArtwork";
+import { detectFaceAnchors, estimateFaceAnchors } from "@/lib/faceAnchors";
 import { MASK_SOURCE_WIDTH } from "@/lib/imageSrc";
 import { useHeadMask } from "@/components/ar/useHeadMask";
 import { useNFTImage } from "@/components/ar/useNFTImage";
@@ -209,7 +210,13 @@ export function MaskPreparationFlow({
         anchorOffsetY: fit.anchorOffsetY,
         scaleOffset: fit.scaleOffset,
         placement: starting.placement,
-        faceAnchors: existingRecord?.faceAnchors ?? null,
+        // Estimated up front, synchronously: this is a cheap alpha-bounds
+        // scan with no model behind it, and it is what makes the mouth/blink
+        // animation alive from the very first frame. Detection may refine it
+        // a few seconds later (below), but the feature must never depend on
+        // that landing — waiting on it is what made the animation look like
+        // it had never been wired up.
+        faceAnchors: existingRecord?.faceAnchors ?? estimateFaceAnchors(image),
         createdAt: existingRecord?.createdAt ?? now,
         updatedAt: now,
         version: USER_MASK_VERSION,
@@ -227,8 +234,8 @@ export function MaskPreparationFlow({
         onComplete({ record, image, persisted: false, warning });
       }
 
-      // Find the ART's own eyes/mouth for the T2 mouth/blink imitation —
-      // AFTER the user is already wearing the mask, never blocking the save:
+      // Try to REFINE the estimate by actually finding a face in the art —
+      // after the user is already wearing the mask, never blocking the save:
       // the first detection loads a second landmarker (wasm + model), which
       // costs seconds on a phone, and "keep it whole" must not freeze for
       // it. Delayed past the stage swap so the recorder's steady-state loop
@@ -237,7 +244,7 @@ export function MaskPreparationFlow({
       // clobber pins the user placed (or an explicit "no face") in between.
       // Picked up the next time the mask loads; FACE PINS' auto-detect gives
       // it immediately on demand.
-      if (persisted && !record.faceAnchors) {
+      if (persisted) {
         window.setTimeout(() => {
           void detectFaceAnchors(image)
             .then(async (anchors) => {
@@ -776,6 +783,9 @@ function MaskPrepEditor({
   const [historyCount, setHistoryCount] = useState(0);
   const [redoCount, setRedoCount] = useState(0);
   const [dirty, setDirty] = useState(false);
+  // Manual background removal (see removeBackgroundNow).
+  const [cutting, setCutting] = useState(false);
+  const [cutMessage, setCutMessage] = useState<string | null>(null);
   const [cursor, setCursor] = useState<Point | null>(null);
   const [hintVisible, setHintVisible] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1029,6 +1039,65 @@ function MaskPrepEditor({
    * snapshots are ImageData at the current dimensions, so resizing here would
    * make every one of them un-restorable.
    */
+  /**
+   * Run background removal on whatever is on the canvas right now.
+   *
+   * Preparation already does this automatically, so most people never need
+   * the button — but "automatic" has to be recoverable when it declines (busy
+   * artwork) or when the user has just pressed "Restore artwork" and wants
+   * the cutout back without starting over. It is also the manual path for a
+   * custom upload the segmenter could not read.
+   *
+   * Undoable like any other edit.
+   */
+  const removeBackgroundNow = async () => {
+    const editCanvas = editCanvasRef.current;
+    const ctx = editCanvas?.getContext("2d", { willReadFrequently: true });
+    const current = editDataRef.current;
+    if (!editCanvas || !ctx || !current || cutting) return;
+
+    setCutting(true);
+    try {
+      // Feed it a copy: prepareArtwork reads pixels and must not race the
+      // live editing canvas.
+      const snapshot = document.createElement("canvas");
+      snapshot.width = editCanvas.width;
+      snapshot.height = editCanvas.height;
+      snapshot.getContext("2d")?.drawImage(editCanvas, 0, 0);
+
+      const prepared = await prepareArtwork(snapshot, { crop: false });
+      if (prepared.via === "original") {
+        setCutMessage(
+          "Couldn't find a subject to separate here — erase the background with the brush instead."
+        );
+        return;
+      }
+
+      const out = document.createElement("canvas");
+      out.width = editCanvas.width;
+      out.height = editCanvas.height;
+      const octx = out.getContext("2d", { willReadFrequently: true });
+      if (!octx) return;
+      octx.drawImage(prepared.canvas, 0, 0, out.width, out.height);
+      const data = octx.getImageData(0, 0, out.width, out.height);
+
+      historyRef.current.push(cloneImageData(current));
+      if (historyRef.current.length > MAX_UNDO) historyRef.current.shift();
+      redoRef.current = [];
+
+      editDataRef.current = data;
+      ctx.putImageData(data, 0, 0);
+      setCutMessage(null);
+      setHistoryCount(historyRef.current.length);
+      setRedoCount(0);
+      setDirty(true);
+      schedulePreview(true);
+      setViewVersion((v) => v + 1);
+    } finally {
+      setCutting(false);
+    }
+  };
+
   const restoreArtwork = () => {
     const editCanvas = editCanvasRef.current;
     const ctx = editCanvas?.getContext("2d", { willReadFrequently: true });
@@ -1389,6 +1458,9 @@ function MaskPrepEditor({
             redo={redo}
             reset={reset}
             restoreArtwork={artworkImage ? restoreArtwork : undefined}
+            removeBackgroundNow={removeBackgroundNow}
+            cutting={cutting}
+            cutMessage={cutMessage}
             maskFlip={maskFlip}
             toggleFlip={() => setMaskFlip((v) => !v)}
           />
@@ -1519,6 +1591,9 @@ function MaskPrepEditor({
           resetFit={resetFit}
           reset={reset}
           restoreArtwork={artworkImage ? restoreArtwork : undefined}
+          removeBackgroundNow={removeBackgroundNow}
+          cutting={cutting}
+          cutMessage={cutMessage}
           maskFlip={maskFlip}
           toggleFlip={() => setMaskFlip((v) => !v)}
           onClose={() => setMobileSheet("none")}
@@ -1541,6 +1616,9 @@ function ToolDock({
   redo,
   reset,
   restoreArtwork,
+  removeBackgroundNow,
+  cutting,
+  cutMessage,
   maskFlip,
   toggleFlip,
 }: {
@@ -1557,6 +1635,9 @@ function ToolDock({
   reset: () => void;
   /** Omitted when there is no original artwork to fall back to. */
   restoreArtwork?: () => void;
+  removeBackgroundNow: () => void;
+  cutting: boolean;
+  cutMessage: string | null;
   maskFlip: boolean;
   toggleFlip: () => void;
 }) {
@@ -1637,6 +1718,21 @@ function ToolDock({
         />
       </div>
 
+      {/* Manual background removal. Preparation already runs this
+          automatically, so this is the recoverable half of "automatic": it is
+          how you get the cutout back after Bring back full artwork, and the
+          way out when the automatic pass declined on busy art. */}
+      <button
+        onClick={removeBackgroundNow}
+        disabled={cutting}
+        className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-full border-[2px] border-banana/55 bg-banana/10 font-[family-name:var(--font-display)] text-[10px] text-banana active:scale-95 disabled:opacity-50"
+      >
+        <Wand2 size={15} strokeWidth={2.5} />
+        {cutting ? "Removing…" : "Remove background"}
+      </button>
+      {cutMessage && (
+        <p className="mt-2 text-center text-xs text-cream/55">{cutMessage}</p>
+      )}
       {restoreArtwork && (
         <button
           onClick={restoreArtwork}
@@ -1952,6 +2048,9 @@ function MoreSheet({
   resetFit,
   reset,
   restoreArtwork,
+  removeBackgroundNow,
+  cutting,
+  cutMessage,
   maskFlip,
   toggleFlip,
   onClose,
@@ -1962,6 +2061,9 @@ function MoreSheet({
   reset: () => void;
   /** Omitted when there is no original artwork to fall back to. */
   restoreArtwork?: () => void;
+  removeBackgroundNow: () => void;
+  cutting: boolean;
+  cutMessage: string | null;
   maskFlip: boolean;
   toggleFlip: () => void;
   onClose: () => void;
@@ -2013,6 +2115,19 @@ function MoreSheet({
           Flip mask
         </button>
       </div>
+      {/* Same control as the desktop rail — background removal has to be
+          reachable on a phone too, which is where most takes happen. */}
+      <button
+        onClick={removeBackgroundNow}
+        disabled={cutting}
+        className="mt-2 flex h-12 w-full items-center justify-center gap-2 rounded-full border-[2px] border-banana/55 bg-banana/10 font-[family-name:var(--font-display)] text-[10px] text-banana active:scale-95 disabled:opacity-50"
+      >
+        <Wand2 size={15} strokeWidth={2.5} />
+        {cutting ? "Removing…" : "Remove background"}
+      </button>
+      {cutMessage && (
+        <p className="mt-2 text-center text-xs text-cream/55">{cutMessage}</p>
+      )}
       {restoreArtwork && (
         <button
           onClick={() => {

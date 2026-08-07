@@ -21,8 +21,8 @@ import {
 import { useRouter } from "next/navigation";
 import { ImagePlus, Trash2, ShieldCheck } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
-import { photoCutout } from "@/lib/aiCutout";
-import { detectFaceAnchors } from "@/lib/faceAnchors";
+import { prepareArtwork, type PrepareVia } from "@/lib/prepareArtwork";
+import { resolveFaceAnchors } from "@/lib/faceAnchors";
 import {
   blobToImage,
   deleteSavedMask,
@@ -47,8 +47,9 @@ type Stage =
   | { kind: "processing" }
   | {
       kind: "preview";
-      cutout: HTMLCanvasElement | null; // null = no person found
+      cutout: HTMLCanvasElement | null; // null = nothing could be separated
       original: HTMLCanvasElement;
+      via: PrepareVia;
     }
   | { kind: "saving" };
 
@@ -128,8 +129,16 @@ export default function CreatePage() {
           i.src = url;
         });
         const original = squareCanvas(img);
-        const cut = await photoCutout(img);
-        setStage({ kind: "preview", cutout: cut?.canvas ?? null, original });
+        // Exactly the pipeline collection art goes through: geometric matte
+        // first (a photo on a plain wall, a logo, a drawing), then the selfie
+        // segmenter (an actual portrait), then untouched.
+        const prepared = await prepareArtwork(img);
+        setStage({
+          kind: "preview",
+          cutout: prepared.via === "original" ? null : prepared.canvas,
+          original,
+          via: prepared.via,
+        });
       } finally {
         URL.revokeObjectURL(url);
       }
@@ -146,7 +155,7 @@ export default function CreatePage() {
         const exported = await exportTransparentCanvas(canvas);
         // Real faces are the landmarker's home turf — anchors give the avatar
         // the same mouth/blink animation collection PFPs get.
-        const faceAnchors = await detectFaceAnchors(canvas).catch(() => null);
+        const faceAnchors = await resolveFaceAnchors(canvas).catch(() => null);
         const id = Date.now();
         const key = maskKey(MY_AVATARS, id);
         const sourceImageUrl = `custom:${key}`;
@@ -303,6 +312,7 @@ export default function CreatePage() {
         {stage.kind === "preview" && (
           <PreviewStage
             cutout={stage.cutout}
+            via={stage.via}
             original={stage.original}
             onWear={wear}
             onRetry={() => setStage({ kind: "idle" })}
@@ -315,11 +325,13 @@ export default function CreatePage() {
 
 function PreviewStage({
   cutout,
+  via,
   original,
   onWear,
   onRetry,
 }: {
   cutout: HTMLCanvasElement | null;
+  via: PrepareVia;
   original: HTMLCanvasElement;
   onWear: (c: HTMLCanvasElement) => void;
   onRetry: () => void;
@@ -348,8 +360,14 @@ function PreviewStage({
       </div>
       {cutout === null && (
         <p className="text-center text-sm text-cream/55">
-          No person found in this photo, so it stays as-is — you can still
-          trim it by hand in the mask editor after wearing it.
+          We couldn&apos;t separate a subject in this image, so it stays as-is —
+          wear it and trim the background by hand in the mask editor.
+        </p>
+      )}
+      {cutout !== null && (
+        <p className="text-center text-sm text-cream/45">
+          Background removed {via === "segmenter" ? "with on-device segmentation" : "automatically"}.
+          Not right? Wear it and fix the edges in the mask editor.
         </p>
       )}
       {cutout !== null && (

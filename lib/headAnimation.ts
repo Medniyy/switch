@@ -55,8 +55,8 @@ const BREATH_SWELL = 0.004;
 /** Jaw-driven stretch: the head lengthens as the mouth opens, and narrows
  *  slightly to conserve apparent volume — the classic squash-and-stretch pair,
  *  which is what sells the motion as physical rather than as a scale tween. */
-const JAW_STRETCH_Y = 0.05;
-const JAW_SQUASH_X = 0.02;
+const JAW_STRETCH_Y = 0.08;
+const JAW_SQUASH_X = 0.03;
 
 /** Blink gives a brief downward squash, like a small nod of the head. */
 const BLINK_SQUASH_Y = 0.018;
@@ -103,13 +103,17 @@ export function computeIdleMotion(
 // T2 — feature imitation. Everything below needs per-mask anchors (see
 // lib/faceAnchors.ts) and is therefore OPT-IN per mask: no anchors, no warp.
 
-/** How far the chin drops at a fully open jaw, as a fraction of drawWidth. */
-export const JAW_DROP_FRAC = 0.09;
+/** How far the chin drops at a fully open jaw, as a fraction of drawWidth.
+ *  Raised from 0.09 after testing: at the old value the mouth moved, but you
+ *  had to be told to look for it, which for an effect whose whole job is to
+ *  be noticed on camera is the same as not working. */
+export const JAW_DROP_FRAC = 0.17;
 /** Half-height of the stretched mouth band, as a fraction of the bitmap. */
-export const MOUTH_BAND_HALF = 0.075;
-/** Eyelid ellipse radii as fractions of drawWidth. */
-export const LID_RX = 0.085;
-export const LID_RY = 0.075;
+export const MOUTH_BAND_HALF = 0.085;
+/** Eyelid ellipse radii as fractions of drawWidth. Also enlarged so a blink
+ *  actually covers the art's eye rather than dotting the middle of it. */
+export const LID_RX = 0.115;
+export const LID_RY = 0.105;
 
 /**
  * Map the raw eyeBlink blendshape to eyelid closure. Idle eyes hover around
@@ -117,7 +121,10 @@ export const LID_RY = 0.075;
  * constantly. 0.3→0.75 maps to a full close so a natural blink still lands.
  */
 export function lidClose(blink: number): number {
-  const t = (clamp01(blink) - 0.3) / 0.45;
+  // Dead zone lowered from 0.3 and the ramp shortened: real blinks are fast,
+  // and the old window ate most of one before the lid had moved far enough
+  // to see. Idle eyes still sit under 0.2, so they stay open.
+  const t = (clamp01(blink) - 0.22) / 0.33;
   return clamp01(t);
 }
 

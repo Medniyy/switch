@@ -46,16 +46,12 @@ import {
 } from "@/lib/userMasks";
 import { usesAutoCutout } from "@/lib/collections";
 import { prepareArtwork } from "@/lib/prepareArtwork";
-import { detectFaceAnchors, estimateFaceAnchors } from "@/lib/faceAnchors";
 import { MASK_SOURCE_WIDTH } from "@/lib/imageSrc";
 import { useHeadMask } from "@/components/ar/useHeadMask";
 import { useNFTImage } from "@/components/ar/useNFTImage";
 import { FaceMaskCanvas } from "@/components/ar/FaceMaskCanvas";
 import { PixelButton } from "@/components/ui/PixelButton";
 import { useIsDesktop } from "@/lib/useMediaQuery";
-
-/** How long after a save the background anchor auto-detection kicks off. */
-const ANCHOR_DETECT_DELAY_MS = 4000;
 
 type PrepTool = "erase" | "restore";
 type BrushPreset = "small" | "medium" | "large";
@@ -184,6 +180,11 @@ export function MaskPreparationFlow({
   onHome,
 }: MaskPreparationFlowProps) {
   const starting = useStartingMask(nft, existingRecord, existingImage);
+  // `nft.image` is a `custom:` token for uploaded avatars, so it can never be
+  // rendered directly; fall back to whatever bitmap we actually have.
+  const headerThumb = nft.image.startsWith("custom:")
+    ? (existingImage?.src ?? starting.seedImage?.src)
+    : nft.image;
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
   // First time on this device we ask "keep the whole character or adjust it?".
   // Coming back in via "Edit mask" (existing record) — or when the caller already
@@ -210,13 +211,7 @@ export function MaskPreparationFlow({
         anchorOffsetY: fit.anchorOffsetY,
         scaleOffset: fit.scaleOffset,
         placement: starting.placement,
-        // Estimated up front, synchronously: this is a cheap alpha-bounds
-        // scan with no model behind it, and it is what makes the mouth/blink
-        // animation alive from the very first frame. Detection may refine it
-        // a few seconds later (below), but the feature must never depend on
-        // that landing — waiting on it is what made the animation look like
-        // it had never been wired up.
-        faceAnchors: existingRecord?.faceAnchors ?? estimateFaceAnchors(image),
+        faceAnchors: existingRecord?.faceAnchors ?? null,
         createdAt: existingRecord?.createdAt ?? now,
         updatedAt: now,
         version: USER_MASK_VERSION,
@@ -234,34 +229,6 @@ export function MaskPreparationFlow({
         onComplete({ record, image, persisted: false, warning });
       }
 
-      // Try to REFINE the estimate by actually finding a face in the art —
-      // after the user is already wearing the mask, never blocking the save:
-      // the first detection loads a second landmarker (wasm + model), which
-      // costs seconds on a phone, and "keep it whole" must not freeze for
-      // it. Delayed past the stage swap so the recorder's steady-state loop
-      // isn't competing with a model load the moment it appears; written
-      // through only if the record hasn't changed meanwhile, so it can never
-      // clobber pins the user placed (or an explicit "no face") in between.
-      // Picked up the next time the mask loads; FACE PINS' auto-detect gives
-      // it immediately on demand.
-      if (persisted) {
-        window.setTimeout(() => {
-          void detectFaceAnchors(image)
-            .then(async (anchors) => {
-              if (!anchors) return;
-              const current = await loadSavedMask(key);
-              if (!current || current.updatedAt !== record.updatedAt) return;
-              await saveUserMask({
-                ...current,
-                faceAnchors: anchors,
-                updatedAt: Date.now(),
-              });
-            })
-            .catch(() => {
-              /* best-effort by design */
-            });
-        }, ANCHOR_DETECT_DELAY_MS);
-      }
     },
     [
       existingRecord?.createdAt,
@@ -298,7 +265,7 @@ export function MaskPreparationFlow({
 
   if (starting.status === "error") {
     return (
-      <PrepShell nft={nft} onChooseAnother={onChooseAnother} backLabel={backLabel} onHome={onHome}>
+      <PrepShell nft={nft} thumbSrc={headerThumb} onChooseAnother={onChooseAnother} backLabel={backLabel} onHome={onHome}>
         <div className="flex min-h-[55dvh] flex-col items-center justify-center gap-4 px-6 text-center">
           <p className="font-[family-name:var(--font-display)] text-sm text-pixelred">
             ARTWORK COULD NOT LOAD
@@ -313,7 +280,7 @@ export function MaskPreparationFlow({
   }
 
   return (
-    <PrepShell nft={nft} onChooseAnother={onChooseAnother} backLabel={backLabel} onHome={onHome}>
+    <PrepShell nft={nft} thumbSrc={headerThumb} onChooseAnother={onChooseAnother} backLabel={backLabel} onHome={onHome}>
       {starting.status !== "ready" || !starting.seedImage ? (
         <div className="flex min-h-[55dvh] flex-col items-center justify-center gap-4 text-center">
           <div className="h-16 w-16 rounded-full border border-banana/50 border-t-banana animate-spin" />
@@ -381,12 +348,15 @@ export function MaskPreparationFlow({
 
 function PrepShell({
   nft,
+  thumbSrc,
   onChooseAnother,
   children,
   backLabel = "Choose another PFP",
   onHome,
 }: {
   nft: NFT;
+  /** Header thumbnail. Omitted when there is no loadable picture yet. */
+  thumbSrc?: string;
   onChooseAnother: () => void;
   children: React.ReactNode;
   backLabel?: string;
@@ -398,13 +368,24 @@ function PrepShell({
         {/* Compact, single-row header so the canvas gets the vertical space. */}
         <header className="flex shrink-0 items-center justify-between gap-3 pb-2 md:pb-3">
           <div className="flex min-w-0 items-center gap-3">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={nft.image}
-              alt={nft.name}
-              className="h-10 w-10 shrink-0 rounded-xl object-cover md:h-12 md:w-12"
-              crossOrigin="anonymous"
-            />
+            {/* A custom avatar's `image` is a `custom:` token, not a URL —
+                there is no collection art behind it — so rendering it as a
+                thumbnail produced a broken-image icon with alt text sprawled
+                across the header. Show the prepared mask instead, which is
+                the picture the user actually chose. */}
+            {thumbSrc ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={thumbSrc}
+                alt={nft.name}
+                className="h-10 w-10 shrink-0 rounded-xl bg-grid object-contain md:h-12 md:w-12"
+                crossOrigin="anonymous"
+              />
+            ) : (
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-grid text-banana md:h-12 md:w-12">
+                <ImageIcon size={18} strokeWidth={2.5} />
+              </span>
+            )}
             <div className="min-w-0">
               <p className="font-[family-name:var(--font-display)] text-[9px] uppercase tracking-wide text-cream/45">
                 Prepare your mask
@@ -1514,7 +1495,11 @@ function MaskPrepEditor({
             </div>
           )}
 
-          <div className="rounded-[20px] border border-cream/10 bg-grid/80 p-3">
+          {/* The flexible middle: this panel scrolls so the Save button below
+              is ALWAYS on screen. It grew past the fold once the doubled
+              up/down range and the extra buttons landed, and a Save you
+              cannot reach means the edit cannot be kept at all. */}
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-[20px] border border-cream/10 bg-grid/80 p-3">
             <p className="font-[family-name:var(--font-display)] text-[10px] text-cream/50">
               Fit
             </p>
@@ -1526,11 +1511,16 @@ function MaskPrepEditor({
               step={0.005}
               onChange={(anchorOffsetX) => updateFit({ anchorOffsetX })}
             />
+            {/* Vertical travel is DOUBLE the horizontal range. Sideways you
+                only ever nudge a mask; downward you may need to push a whole
+                head down to sit on your own — tall art, hats, and any mask
+                whose face sits high in its own square all ran out of slider
+                at 0.24 and could not be brought down far enough. */}
             <FitSlider
               label="Up / down"
               value={fit.anchorOffsetY}
-              min={-0.24}
-              max={0.24}
+              min={-0.5}
+              max={0.5}
               step={0.005}
               onChange={(anchorOffsetY) => updateFit({ anchorOffsetY })}
             />
@@ -1562,7 +1552,7 @@ function MaskPrepEditor({
               onClick={complete}
               size="lg"
               disabled={saving}
-              className="min-h-14 w-full"
+              className="min-h-14 w-full shrink-0"
             >
               <Check size={18} strokeWidth={3} />
               {saving ? "Saving..." : "Looks good"}
@@ -1642,7 +1632,11 @@ function ToolDock({
   toggleFlip: () => void;
 }) {
   return (
-    <div className="rounded-[24px] border border-cream/10 bg-grid/85 p-3">
+    // max-h + scroll: the editor page is a clipped 100dvh, so every control
+    // added here (Remove background, Bring back full artwork…) used to push
+    // the Save button below the fold where it could not be reached at all.
+    // The panel now scrolls within itself and Save stays on screen.
+    <div className="max-h-full overflow-y-auto rounded-[24px] border border-cream/10 bg-grid/85 p-3">
       <div className="grid grid-cols-2 gap-2">
         <ToolButton
           active={tool === "erase"}
@@ -2078,11 +2072,12 @@ function MoreSheet({
         step={0.005}
         onChange={(anchorOffsetX) => updateFit({ anchorOffsetX })}
       />
+      {/* Same doubled vertical range as the desktop panel (see aside). */}
       <FitSlider
         label="Up / down"
         value={fit.anchorOffsetY}
-        min={-0.24}
-        max={0.24}
+        min={-0.5}
+        max={0.5}
         step={0.005}
         onChange={(anchorOffsetY) => updateFit({ anchorOffsetY })}
       />

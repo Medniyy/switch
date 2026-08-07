@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Banana,
-  Cake,
   CameraOff,
   Edit3,
   ImagePlus,
@@ -22,11 +21,12 @@ import { useAppStore } from "@/store/useAppStore";
 import { isMonkeyDaoCollection } from "@/lib/collections";
 import { useCameraStream } from "./useCameraStream";
 import { useFaceMesh } from "./useFaceMesh";
+import { useHandTracking } from "./useHandTracking";
+import { BananaCatchOverlay } from "./BananaCatchOverlay";
+import { BananaCatchGame } from "@/lib/bananaCatch";
 import { FaceMaskCanvas, type LiveMaskTrack } from "./FaceMaskCanvas";
 import { MASK_UP_NUDGE } from "@/lib/imageUtils";
 import { MaskSettings, MaskQuickToggles } from "./MaskControls";
-import { ExpressionPinsSheet } from "./ExpressionPinsSheet";
-import { resolveFaceAnchors, type FaceAnchors } from "@/lib/faceAnchors";
 import { RecordButton } from "./RecordButton";
 import { useMediaRecorder } from "@/components/recorder/useMediaRecorder";
 import { VideoPreview } from "@/components/recorder/VideoPreview";
@@ -90,8 +90,6 @@ export function RecordView() {
   const cameraMirror = useAppStore((s) => s.cameraMirror);
   const bananaRain = useAppStore((s) => s.bananaRain);
   const setBananaRain = useAppStore((s) => s.setBananaRain);
-  const birthdayCake = useAppStore((s) => s.birthdayCake);
-  const setBirthdayCake = useAppStore((s) => s.setBirthdayCake);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -114,7 +112,6 @@ export function RecordView() {
 
   const [faceDetected, setFaceDetected] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [pinsOpen, setPinsOpen] = useState(false);
   const [captured, setCaptured] = useState<CapturedPhoto | null>(null);
   // Where the mask sat on the face at shutter time — seeds the editor's
   // pre-placed PFP for camera captures (null = centered, e.g. uploads).
@@ -127,6 +124,11 @@ export function RecordView() {
   const [maskLoadMessage, setMaskLoadMessage] = useState<string | null>(null);
   const [editingMask, setEditingMask] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  // Banana Catch. The game instance is a ref (it steps inside the render
+  // loop); `catchOn` is the React-visible switch that mounts the HUD and
+  // brings the hand model up.
+  const [catchOn, setCatchOn] = useState(false);
+  const catchGameRef = useRef<BananaCatchGame | null>(null);
   const [teleprompter, setTeleprompter] = useState<TeleprompterSettings>(
     DEFAULT_TELEPROMPTER
   );
@@ -166,6 +168,28 @@ export function RecordView() {
   const { videoRef, attachVideo, status: camStatus, retry, audioStatus } =
     useCameraStream(audioTrackRef, liveActive);
   const { landmarkerRef, status: meshStatus } = useFaceMesh();
+  const { handLandmarkerRef, status: handStatus } = useHandTracking(catchOn);
+
+  const startCatchGame = useCallback(() => {
+    const game = catchGameRef.current ?? new BananaCatchGame();
+    game.reset();
+    catchGameRef.current = game;
+    setFiltersOpen(false);
+    setCatchOn(true);
+  }, []);
+
+  // Dev/test seam: lets the harness inspect the running game (phase, score)
+  // without a camera or a pair of hands. Stripped from production.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    (window as unknown as { __switchCatch?: unknown }).__switchCatch =
+      catchGameRef;
+  }, []);
+
+  const stopCatchGame = useCallback(() => {
+    setCatchOn(false);
+    catchGameRef.current = null;
+  }, []);
 
   // The whole recorder (camera + editor) is a fixed camera-app viewport — never
   // let the document itself scroll behind it.
@@ -218,31 +242,6 @@ export function RecordView() {
         setRuntimeMask({ record: saved, image, persisted: true });
         setMaskLoadStatus("ready");
 
-        // Backfill face anchors for masks saved before they existed (or
-        // whose detection came back empty, which on stylised art is most of
-        // them). Without this the mouth/blink animation stays switched off
-        // for every PFP already on the device until it is prepared again,
-        // which is precisely how the feature came to look like it was never
-        // wired up. Runs after the mask is already on screen and writes
-        // through only if nothing else changed the record meanwhile.
-        if (!saved.faceAnchors) {
-          void resolveFaceAnchors(image)
-            .then(async (anchors) => {
-              if (cancelled || !anchors) return;
-              const current = await loadSavedMask(key);
-              if (!current || current.updatedAt !== saved.updatedAt) return;
-              const next = { ...current, faceAnchors: anchors, updatedAt: Date.now() };
-              setRuntimeMask((prev) =>
-                prev && prev.record.key === key ? { ...prev, record: next } : prev
-              );
-              await saveUserMask(next).catch(() => {
-                /* animation already live this session; storage can retry */
-              });
-            })
-            .catch(() => {
-              /* best-effort */
-            });
-        }
       } catch {
         if (cancelled) return;
         setMaskLoadStatus("error");
@@ -386,30 +385,6 @@ export function RecordView() {
     setMaskLoadStatus("missing");
   }, [selectedNFT]);
 
-  // Save manually-pinned (or cleared) face anchors for the T2 mouth/blink
-  // imitation. Same persistence pattern as the flip toggle: state updates
-  // immediately, storage is best-effort.
-  const saveFaceAnchors = useCallback(
-    (faceAnchors: FaceAnchors | null) => {
-      setPinsOpen(false);
-      if (!runtimeMask) return;
-      const nextRecord: SavedUserMask = {
-        ...runtimeMask.record,
-        faceAnchors,
-        updatedAt: Date.now(),
-      };
-      setRuntimeMask({ ...runtimeMask, record: nextRecord });
-      if (runtimeMask.persisted) {
-        void saveUserMask(nextRecord).catch(() => {
-          setMaskLoadMessage(
-            "Face pins changed for this session. Browser storage could not update them."
-          );
-        });
-      }
-    },
-    [runtimeMask]
-  );
-
   const toggleMaskFlip = useCallback(() => {
     if (!runtimeMask) return;
     const nextRecord: SavedUserMask = {
@@ -498,9 +473,10 @@ export function RecordView() {
             canvasRef={canvasRef}
             nftImage={runtimeMask?.image ?? null}
             placement={runtimeMask?.record.placement ?? null}
-            faceAnchors={runtimeMask?.record.faceAnchors ?? null}
             maskFlip={runtimeMask?.record.maskFlip ?? false}
             fit={preparedFit}
+            handLandmarkerRef={catchOn ? handLandmarkerRef : undefined}
+            catchGameRef={catchOn ? catchGameRef : undefined}
             trackRef={liveTrackRef}
             onFaceChange={setFaceDetected}
             className="absolute inset-0 w-full h-full object-cover desktop:object-contain"
@@ -601,10 +577,10 @@ export function RecordView() {
               <button
                 onClick={() => setFiltersOpen(true)}
                 aria-label="Filters"
-                aria-pressed={bananaRain || birthdayCake}
+                aria-pressed={bananaRain}
                 title="Filters"
                 className={`relative w-11 h-11 rounded-full border-[2px] flex items-center justify-center backdrop-blur-sm transition-colors active:scale-95 ${
-                  bananaRain || birthdayCake
+                  bananaRain
                     ? "bg-banana text-screen border-banana"
                     : "bg-screen/55 text-cream border-cream/40"
                 }`}
@@ -923,55 +899,46 @@ export function RecordView() {
                 </span>
               </button>
               <button
-                onClick={() => setBirthdayCake(!birthdayCake)}
-                aria-pressed={birthdayCake}
-                className={`mt-3 flex w-full items-center gap-3 rounded-2xl border-[2px] p-4 text-left transition-colors ${
-                  birthdayCake
-                    ? "border-banana bg-banana/10"
-                    : "border-cream/25 bg-white/5"
-                }`}
+                onClick={startCatchGame}
+                className="mt-3 flex w-full items-center gap-3 rounded-2xl border-[2px] border-cream/25 bg-white/5 p-4 text-left transition-colors"
               >
-                <span
-                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${
-                    birthdayCake ? "bg-banana text-screen" : "bg-cream/10 text-banana"
-                  }`}
-                >
-                  <Cake size={22} strokeWidth={2.5} />
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-cream/10 text-banana">
+                  <Banana size={22} strokeWidth={2.5} />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block font-[family-name:var(--font-display)] text-[11px] text-cream">
-                    Blow Out The Candles
+                    Banana Catch · 5 Years
                   </span>
                   <span className="block text-sm text-cream/55">
-                    SMB turns 5 — open wide to blow the cake out on camera.
+                    Catch falling bananas with your hands. 30 seconds.
                   </span>
                 </span>
-                <span
-                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                    birthdayCake ? "bg-banana" : "bg-cream/25"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-screen transition-transform ${
-                      birthdayCake ? "translate-x-[22px]" : "translate-x-0.5"
-                    }`}
-                  />
+                <span className="shrink-0 rounded-full bg-banana px-3 py-1.5 font-[family-name:var(--font-display)] text-[9px] text-screen">
+                  PLAY
                 </span>
               </button>
             </div>
           </div>
         )}
 
-        {/* Birthday-game instructions. DOM, never canvas: anything painted
-            into the compositing canvas is inside the recorded clip, and this
-            is guidance for the person holding the phone, not part of their
-            take (same rule as the teleprompter). Without it the cake just
-            appears and nobody knows it is a game. */}
-        {birthdayCake && !anyResult && !inEditor && (
-          <div className="pointer-events-none absolute inset-x-0 top-16 z-30 flex justify-center px-4">
-            <span className="flex items-center gap-2 rounded-full border-[2px] border-banana/60 bg-screen/80 px-4 py-2 text-center font-[family-name:var(--font-display)] text-[10px] leading-tight text-banana backdrop-blur-sm">
-              <Cake size={14} strokeWidth={2.5} />
-              OPEN YOUR MOUTH WIDE TO BLOW OUT THE CANDLES
+        {/* Banana Catch HUD + end-of-round postcard */}
+        {catchOn && !anyResult && !inEditor && (
+          <BananaCatchOverlay
+            gameRef={catchGameRef}
+            frameCanvasRef={canvasRef}
+            onExit={stopCatchGame}
+            onRecordVideo={() => {
+              // Same game, but rolling: switch to video and re-run so the
+              // whole attempt (bananas and all) lands in a clip they can post.
+              setCaptureMode("video");
+              startCatchGame();
+            }}
+          />
+        )}
+        {catchOn && handStatus === "loading" && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-32 z-40 flex justify-center px-4">
+            <span className="rounded-full bg-screen/80 px-4 py-2 font-[family-name:var(--font-display)] text-[10px] text-cream/70 backdrop-blur-sm">
+              WARMING UP HAND TRACKING…
             </span>
           </div>
         )}
@@ -1008,15 +975,6 @@ export function RecordView() {
               </div>
               <MaskSettings />
               <button
-                onClick={() => {
-                  setSettingsOpen(false);
-                  setPinsOpen(true);
-                }}
-                className="mt-5 w-full rounded-full border-[2px] border-banana/50 bg-banana/10 py-3 font-[family-name:var(--font-display)] text-[10px] text-banana active:scale-[0.98]"
-              >
-                FACE PINS · MOUTH &amp; BLINK
-              </button>
-              <button
                 onClick={resetCurrentNFT}
                 className="mt-5 w-full rounded-full border-[2px] border-pixelred/60 bg-pixelred/10 py-3 font-[family-name:var(--font-display)] text-[10px] text-pixelred active:scale-[0.98]"
               >
@@ -1026,15 +984,6 @@ export function RecordView() {
           </div>
         )}
 
-        {/* Face pins (T2 mouth/blink anchors) */}
-        {pinsOpen && !anyResult && !inEditor && runtimeMask && (
-          <ExpressionPinsSheet
-            image={runtimeMask.image}
-            anchors={runtimeMask.record.faceAnchors ?? null}
-            onSave={saveFaceAnchors}
-            onClose={() => setPinsOpen(false)}
-          />
-        )}
       </div>
     </div>
   );

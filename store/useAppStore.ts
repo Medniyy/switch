@@ -49,9 +49,6 @@ interface AppState {
    *  whenever the selected NFT changes so it can't linger onto a non-MonkeyDAO
    *  collection. Read inside the render loop via a ref (no per-frame React state). */
   bananaRain: boolean;
-  /** MonkeyDAO-only "Blow Out The Candles" birthday game (SMB turns 5). Same
-   *  rules as bananaRain: session-only, reset on NFT change, read via a ref. */
-  birthdayCake: boolean;
   setSelectedNFT: (nft: NFT | null) => void;
   setMask: (patch: Partial<MaskSettings>) => void;
   resetMask: () => void;
@@ -62,7 +59,6 @@ interface AppState {
   setCameraMirror: (on: boolean) => void;
   setDebugTracking: (on: boolean) => void;
   setBananaRain: (on: boolean) => void;
-  setBirthdayCake: (on: boolean) => void;
 }
 
 const DEFAULT_MASK: MaskSettings = {
@@ -84,12 +80,10 @@ export const useAppStore = create<AppState>((set) => ({
   cameraMirror: true,
   debugTracking: false,
   bananaRain: false,
-  birthdayCake: false,
   // Selecting a different PFP always clears the MonkeyDAO effects — they must
   // never carry from a MonkeyDAO token onto a collection that isn't allowed
   // to show them.
-  setSelectedNFT: (nft) =>
-    set({ selectedNFT: nft, bananaRain: false, birthdayCake: false }),
+  setSelectedNFT: (nft) => set({ selectedNFT: nft, bananaRain: false }),
   setMask: (patch) => set((s) => ({ mask: { ...s.mask, ...patch } })),
   resetMask: () => set({ mask: DEFAULT_MASK }),
   setAudioEnabled: (on) => set({ audioEnabled: on }),
@@ -99,7 +93,6 @@ export const useAppStore = create<AppState>((set) => ({
   setCameraMirror: (on) => set({ cameraMirror: on }),
   setDebugTracking: (on) => set({ debugTracking: on }),
   setBananaRain: (on) => set({ bananaRain: on }),
-  setBirthdayCake: (on) => set({ birthdayCake: on }),
 }));
 
 // Dev/test-only seam: expose the store so end-to-end tests can inject a

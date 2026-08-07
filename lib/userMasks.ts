@@ -59,6 +59,12 @@ export interface MaskFit {
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
+/** Pseudo-collection id every custom (uploaded) avatar lives under.
+ *  Deliberately NOT in the COLLECTIONS registry — these exist per device,
+ *  not per chain — but it lives here so any consumer can recognise one
+ *  without importing a page. */
+export const MY_AVATARS = "my-avatars";
+
 export function maskKey(collectionId: string, tokenId: string | number) {
   return `${collectionId}:${String(tokenId)}`;
 }

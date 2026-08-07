@@ -27,6 +27,13 @@ const SELFIE_PATH = join(OUT_DIR, "selfie_segmenter.tflite");
 const SELFIE_URL =
   "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/selfie_segmenter.tflite";
 
+// Hand Landmarker — powers the Banana Catch game (lib/bananaCatch.ts), which
+// needs to know where the player's hands actually are. Loaded lazily by the
+// browser only while that game is running, never on the normal record path.
+const HANDS_PATH = join(OUT_DIR, "hand_landmarker.task");
+const HANDS_URL =
+  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+
 async function exists(p) {
   try {
     await access(p);
@@ -93,6 +100,7 @@ async function main() {
   for (const { path, url, label } of [
     { path: MODEL_PATH, url: MODEL_URL, label: "Face Landmarker" },
     { path: SELFIE_PATH, url: SELFIE_URL, label: "Selfie Segmenter" },
+    { path: HANDS_PATH, url: HANDS_URL, label: "Hand Landmarker" },
   ]) {
     if (await exists(path)) {
       console.log(`${label} model already present, skipping download.`);

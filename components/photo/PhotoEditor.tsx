@@ -13,9 +13,18 @@ import {
   Trash2,
   UserRound,
   Wand2,
+  ImagePlus,
 } from "lucide-react";
 import type { FaceLandmarker } from "@mediapipe/tasks-vision";
 import type { NFT } from "@/lib/types";
+import { prepareArtwork } from "@/lib/prepareArtwork";
+import { MY_AVATARS } from "@/lib/userMasks";
+
+/** Ids for uploaded slots. A counter, not Date.now(): calling a clock while
+ *  building render-visible state is impure, and two uploads in the same
+ *  millisecond would collide anyway. */
+let uploadSeq = 1;
+
 import { useAppStore } from "@/store/useAppStore";
 import {
   BANANA_SCATTER_SEED,
@@ -122,6 +131,9 @@ export function PhotoEditor({
   const [slots, setSlots] = useState<MonkeSlot[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pickingForId, setPickingForId] = useState<string | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  /** Custom avatars have no collection behind them (see addUploadedSlot). */
+  const isCustomAvatar = initialNFT?.collection === MY_AVATARS;
   const [busy, setBusy] = useState(false);
 
   // --- Per-PFP mask preparation for newly-added monkes -----------------------
@@ -297,6 +309,71 @@ export function PhotoEditor({
   }, [initImage]);
 
   // ---- toolbar actions ----
+  /**
+   * Add another PFP by UPLOADING an image.
+   *
+   * The number sheet asks "which token?", which is meaningless for a custom
+   * avatar — there is no collection behind it and no number to type. Those
+   * users had no way to add a second face to a photo at all, so uploading is
+   * the picker for them (and a useful extra for everyone else).
+   */
+  const addUploadedSlot = async (file: File) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const center = screenToPhoto(
+      rect.left + rect.width / 2,
+      rect.top + rect.height / 2
+    );
+    const url = URL.createObjectURL(file);
+    try {
+      const raw = await new Promise<HTMLImageElement>((res, rej) => {
+        const i = new Image();
+        i.onload = () => res(i);
+        i.onerror = () => rej(new Error("not an image"));
+        i.src = url;
+      });
+      // Same on-device pipeline the rest of the app uses, so an uploaded face
+      // arrives with its background already gone.
+      const prepared = await prepareArtwork(raw);
+      const image = await new Promise<HTMLImageElement>((res, rej) => {
+        const i = new Image();
+        i.onload = () => res(i);
+        i.onerror = () => rej(new Error("bad cutout"));
+        i.src = prepared.canvas.toDataURL("image/png");
+      });
+      const id = uid();
+      setSlots((prev) => [
+        ...prev,
+        {
+          id,
+          cx: center.x,
+          cy: center.y,
+          size: Math.min(photo.w, photo.h) * 0.4,
+          rot: 0,
+          nft: null,
+          cutout: null,
+          flip: false,
+          source: "manual",
+        },
+      ]);
+      attachToSlot(
+        id,
+        {
+          id: uploadSeq++,
+          collection: MY_AVATARS,
+          name: "Uploaded",
+          image: `custom:upload:${id}`,
+        },
+        image
+      );
+    } catch {
+      /* unreadable file — nothing added, nothing broken */
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  };
+
   const addManualSlot = () => {
     const el = containerRef.current;
     if (!el) return;
@@ -659,15 +736,53 @@ export function PhotoEditor({
             <RotateCcw size={14} strokeWidth={3} />
             RETAKE
           </PixelButton>
-          <PixelButton
-            variant="ghost"
-            size="sm"
-            onClick={addManualSlot}
-            className="flex items-center gap-1"
-          >
-            <Plus size={14} strokeWidth={3} />
-            ADD PFP
-          </PixelButton>
+          {/* A custom avatar has no collection to pick a number from, so its
+              "add another" IS an upload. */}
+          {isCustomAvatar ? (
+            <PixelButton
+              variant="ghost"
+              size="sm"
+              onClick={() => uploadInputRef.current?.click()}
+              className="flex items-center gap-1"
+            >
+              <Plus size={14} strokeWidth={3} />
+              ADD IMAGE
+            </PixelButton>
+          ) : (
+            <>
+              <PixelButton
+                variant="ghost"
+                size="sm"
+                onClick={addManualSlot}
+                className="flex items-center gap-1"
+              >
+                <Plus size={14} strokeWidth={3} />
+                ADD PFP
+              </PixelButton>
+              <PixelButton
+                variant="ghost"
+                size="sm"
+                onClick={() => uploadInputRef.current?.click()}
+                className="flex items-center gap-1"
+                title="Add your own image"
+              >
+                <ImagePlus size={14} strokeWidth={3} />
+                UPLOAD
+              </PixelButton>
+            </>
+          )}
+          <input
+            ref={uploadInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            aria-label="Add an image"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) void addUploadedSlot(f);
+            }}
+          />
           <PixelButton
             size="sm"
             onClick={confirm}

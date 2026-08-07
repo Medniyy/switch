@@ -22,13 +22,13 @@ import { useRouter } from "next/navigation";
 import { ImagePlus, Trash2, ShieldCheck } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 import { prepareArtwork, type PrepareVia } from "@/lib/prepareArtwork";
-import { resolveFaceAnchors } from "@/lib/faceAnchors";
 import {
   blobToImage,
   deleteSavedMask,
   exportTransparentCanvas,
   listSavedMasks,
   maskKey,
+  MY_AVATARS,
   saveUserMask,
   USER_MASK_VERSION,
   type SavedUserMask,
@@ -36,9 +36,6 @@ import {
 import { PixelButton } from "@/components/ui/PixelButton";
 import { BlinkingCursor } from "@/components/ui/BlinkingCursor";
 
-/** Pseudo-collection id all custom avatars live under. Deliberately not in
- *  the COLLECTIONS registry — these exist per device, not per chain. */
-export const MY_AVATARS = "my-avatars";
 
 const MAX_SOURCE_DIM = 2048; // downscale huge camera rolls before processing
 
@@ -153,9 +150,6 @@ export default function CreatePage() {
       setStage({ kind: "saving" });
       try {
         const exported = await exportTransparentCanvas(canvas);
-        // Real faces are the landmarker's home turf — anchors give the avatar
-        // the same mouth/blink animation collection PFPs get.
-        const faceAnchors = await resolveFaceAnchors(canvas).catch(() => null);
         const id = Date.now();
         const key = maskKey(MY_AVATARS, id);
         const sourceImageUrl = `custom:${key}`;
@@ -173,7 +167,6 @@ export default function CreatePage() {
           anchorOffsetY: 0,
           scaleOffset: 0,
           placement: null,
-          faceAnchors,
           createdAt: id,
           updatedAt: id,
           version: USER_MASK_VERSION,

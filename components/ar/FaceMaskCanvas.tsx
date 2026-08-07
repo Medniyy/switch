@@ -15,18 +15,14 @@ import {
 } from "@/lib/imageUtils";
 import type { MaskFit } from "@/lib/userMasks";
 import { BananaField } from "@/lib/bananaRain";
-import { CakeGame } from "@/lib/birthdayCake";
+import { BananaCatchGame, type CatchHand } from "@/lib/bananaCatch";
+import type { HandLandmarker } from "@mediapipe/tasks-vision";
 import {
   computeIdleMotion,
-  computeMouthSlices,
   expressionFromBlendshapes,
-  lidClose,
-  LID_RX,
-  LID_RY,
   NEUTRAL_EXPRESSION,
   type LiveExpression,
 } from "@/lib/headAnimation";
-import { sanitizeFaceAnchors, type FaceAnchors } from "@/lib/faceAnchors";
 import { photoCutout } from "@/lib/aiCutout";
 import { removeBackground } from "@/lib/removeBackground";
 import { computeSubjectMatte } from "@/lib/subjectMatte";
@@ -51,14 +47,15 @@ export interface LiveMaskTrack {
 interface FaceMaskCanvasProps {
   videoRef: RefObject<HTMLVideoElement | null>;
   landmarkerRef: RefObject<FaceLandmarker | null>;
+  /** Hand tracking for the Banana Catch game; null when it isn't running. */
+  handLandmarkerRef?: RefObject<HandLandmarker | null>;
+  /** Live game instance, owned by the caller so it can read the score. */
+  catchGameRef?: RefObject<BananaCatchGame | null>;
   canvasRef: RefObject<HTMLCanvasElement | null>;
   nftImage: HTMLImageElement | null;
   /** When set, `nftImage` is a precomputed head mask, placed + rotated by its own
    *  facial anchor/scale (see computeMaskTransform) instead of a centered box. */
   placement?: MaskPlacement | null;
-  /** The art's own eye/mouth positions (per-mask, from the saved record).
-   *  Enables the T2 mouth/blink imitation; null keeps the draw T1-only. */
-  faceAnchors?: FaceAnchors | null;
   maskFlip?: boolean;
   fit?: MaskFit;
   /** Written every frame with the latest mask draw (see LiveMaskTrack). Must be
@@ -102,10 +99,11 @@ const clampRatio = (v: number, ref: number, r: number) =>
 export function FaceMaskCanvas({
   videoRef,
   landmarkerRef,
+  handLandmarkerRef,
+  catchGameRef,
   canvasRef,
   nftImage,
   placement = null,
-  faceAnchors = null,
   maskFlip = false,
   fit = { anchorOffsetX: 0, anchorOffsetY: 0, scaleOffset: 0 },
   trackRef,
@@ -118,7 +116,6 @@ export function FaceMaskCanvas({
   const cameraMirror = useAppStore((s) => s.cameraMirror);
   const debugTracking = useAppStore((s) => s.debugTracking);
   const bananaRain = useAppStore((s) => s.bananaRain);
-  const birthdayCake = useAppStore((s) => s.birthdayCake);
   const maskRef = useRef(mask);
   const qualityRef = useRef(videoQuality);
   const cameraMirrorRef = useRef(cameraMirror);
@@ -127,12 +124,15 @@ export function FaceMaskCanvas({
   const debugRef = useRef(debugTracking);
   const bananaRainRef = useRef(bananaRain);
   const bananaFieldRef = useRef<BananaField | null>(null);
-  const birthdayCakeRef = useRef(birthdayCake);
-  const cakeGameRef = useRef<CakeGame | null>(null);
   const lastFrameRef = useRef(0);
   const nftRef = useRef(nftImage);
   const placementRef = useRef(placement);
-  const anchorsRef = useRef(faceAnchors);
+  // The render loop is created once with empty deps, so every value it reads
+  // must arrive through a ref — a prop captured at setup time never updates.
+  // The catch game is switched on long after mount, so it needs the same
+  // treatment as the mask settings.
+  const catchRef = useRef(catchGameRef);
+  const handsRef = useRef(handLandmarkerRef);
   const faceRef = useRef<boolean | null>(null);
   const debugCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -155,14 +155,10 @@ export function FaceMaskCanvas({
     // Re-seed a full-height scatter each time the effect is switched on.
     if (bananaRain) bananaFieldRef.current?.reset();
   }, [bananaRain]);
-  useEffect(() => {
-    birthdayCakeRef.current = birthdayCake;
-    // Fresh cake (slide-in, all candles lit) on every enable.
-    if (birthdayCake) cakeGameRef.current?.reset();
-  }, [birthdayCake]);
   useEffect(() => { nftRef.current = nftImage; }, [nftImage]);
   useEffect(() => { placementRef.current = placement; }, [placement]);
-  useEffect(() => { anchorsRef.current = faceAnchors; }, [faceAnchors]);
+  useEffect(() => { catchRef.current = catchGameRef; }, [catchGameRef]);
+  useEffect(() => { handsRef.current = handLandmarkerRef; }, [handLandmarkerRef]);
 
   // Dev/test-only seam: expose the pure tracking-transform functions so tests can
   // feed synthetic landmarks and verify head-roll rotation + rotation-invariant
@@ -180,10 +176,6 @@ export function FaceMaskCanvas({
       BASE_COVERAGE_SCALE,
       computeIdleMotion,
       expressionFromBlendshapes,
-      computeMouthSlices,
-      lidClose,
-      sanitizeFaceAnchors,
-      CakeGame,
       photoCutout,
       removeBackground,
       computeSubjectMatte,
@@ -336,70 +328,7 @@ export function FaceMaskCanvas({
           ctx.rotate(smoothed.rotation);
           if (maskFlip) ctx.scale(-1, 1);
           ctx.scale(motion.scaleX, motion.scaleY);
-          // T2 — the art's own mouth and eyes move with the wearer's, when
-          // this mask carries anchors. Engaged only while a feature is
-          // actually moving; the resting frame stays the exact single
-          // drawImage every anchor-less mask always gets, so a mask with no
-          // anchors (or liveliness 0) cannot ever be warped.
-          const anchors = sanitizeFaceAnchors(anchorsRef.current);
-          const jaw = Math.min(1, expression.jawOpen * 1.6); // full drop before the jaw's real max
-          const lid = lidClose(expression.blink);
-          const left = -anchorX * dw;
-          const top = -(anchorY + MASK_UP_NUDGE) * dw;
-          const animating =
-            !!anchors && liveliness > 0 && (jaw > 0.03 || lid > 0.01);
-          if (!animating) {
-            ctx.drawImage(img, left, top, dw, dw);
-          } else {
-            const ih = img.naturalHeight;
-            const iw = img.naturalWidth;
-            const { y0, y1, drop } = computeMouthSlices(
-              anchors.mouth.y,
-              ih,
-              dw,
-              jaw,
-              liveliness
-            );
-            if (drop > 0) {
-              const sy = dw / ih;
-              // Top of the head, untouched.
-              ctx.drawImage(img, 0, 0, iw, y0, left, top, dw, y0 * sy);
-              // Mouth band, stretched taller by `drop`.
-              ctx.drawImage(
-                img, 0, y0, iw, y1 - y0,
-                left, top + y0 * sy, dw, (y1 - y0) * sy + drop
-              );
-              // Chin and below, pushed down by the same amount.
-              ctx.drawImage(
-                img, 0, y1, iw, ih - y1,
-                left, top + y1 * sy + drop, dw, (ih - y1) * sy
-              );
-            } else {
-              ctx.drawImage(img, left, top, dw, dw);
-            }
-            if (lid > 0.01) {
-              // Eyelids: art-coloured ellipses scaling in over each eye. The
-              // colour was sampled from just above the eye at save time, so
-              // the lid reads as this character's skin, not a grey shutter.
-              ctx.globalAlpha = opacity * Math.min(1, lid * 1.4);
-              for (const [eye, color] of [
-                [anchors.eyeL, anchors.lidL],
-                [anchors.eyeR, anchors.lidR],
-              ] as const) {
-                ctx.fillStyle = color;
-                ctx.beginPath();
-                ctx.ellipse(
-                  left + eye.x * dw,
-                  top + eye.y * dw,
-                  LID_RX * dw * liveliness,
-                  LID_RY * dw * lid * liveliness,
-                  0, 0, Math.PI * 2
-                );
-                ctx.fill();
-              }
-              ctx.globalAlpha = opacity;
-            }
-          }
+          ctx.drawImage(img, -anchorX * dw, -(anchorY + MASK_UP_NUDGE) * dw, dw, dw);
           ctx.restore();
           if (trackRef) {
             trackRef.current = {
@@ -423,21 +352,44 @@ export function FaceMaskCanvas({
       }
       ctx.restore();
 
-      // --- Birthday cake game (MonkeyDAO, SMB's 5th) -------------------------
-      // Drawn AFTER ctx.restore(), so it is (a) in true screen space, never
-      // mirrored — the numeral "5" reads as a 5 — and (b) the FRONTMOST layer,
-      // in front of the wearer and their avatar.
-      //
-      // It used to sit under the avatar, next to the bananas, and the bug that
-      // exposed the difference was simple: lean toward the camera and your own
-      // head covered the cake, because the mask is drawn over you and the cake
-      // was drawn under it. Bananas can live behind you; a thing you are
-      // supposed to interact with cannot, or it reads as being in another room.
-      // The wearer's live jawOpen is the game input (blowing the candles out).
-      if (birthdayCakeRef.current) {
-        if (!cakeGameRef.current) cakeGameRef.current = new CakeGame();
-        cakeGameRef.current.update(frameDt, w, h, expression.jawOpen);
-        cakeGameRef.current.draw(ctx);
+
+      // --- Banana Catch (MonkeyDAO) ------------------------------------------
+      // Frontmost layer, drawn after ctx.restore() so it is in true screen
+      // space: unmirrored (the pixel "5" has to read as a 5) and in front of
+      // the wearer, because the player is reaching out to touch these.
+      const game = catchRef.current?.current;
+      if (game) {
+        // Where are the player's hands? Landmarks come back normalised to the
+        // VIDEO frame, so they need the same mirror the camera draw got —
+        // otherwise reaching right moves the catcher left and the game feels
+        // broken rather than hard.
+        const hands: CatchHand[] = [];
+        const hl = handsRef.current?.current;
+        if (hl) {
+          try {
+            const res = hl.detectForVideo(video, now);
+            for (const lm of res.landmarks ?? []) {
+              // 0 = wrist, 9 = middle-finger base. Their midpoint is the palm,
+              // and their distance is a decent proxy for hand size, so the
+              // catch radius scales with how close the player is.
+              const wrist = lm[0];
+              const mid = lm[9];
+              if (!wrist || !mid) continue;
+              const px = ((wrist.x + mid.x) / 2) * w;
+              const py = ((wrist.y + mid.y) / 2) * h;
+              const span = Math.hypot((mid.x - wrist.x) * w, (mid.y - wrist.y) * h);
+              hands.push({
+                x: cameraMirror ? w - px : px,
+                y: py,
+                r: Math.max(w * 0.05, span * 1.6),
+              });
+            }
+          } catch {
+            /* detector not ready this frame — the round just gets a gap */
+          }
+        }
+        game.update(frameDt, w, h, hands);
+        game.draw(ctx);
       }
 
       // --- Dev debug overlay on a SEPARATE canvas (never recorded/captured) ---

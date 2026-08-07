@@ -305,6 +305,100 @@ test("a clip that came back silent says so instead of pretending", async ({
   ).toBeVisible();
 });
 
+/**
+ * Swap the recorder's PCM-tap worklet for one that delivers blocks of exact
+ * digital silence at the normal cadence. This is WebKit's WebAudio mic bug in
+ * miniature: the graph runs, blocks arrive, every API reports success, and
+ * every sample is 0. (The other silent-clip test above posts NO blocks — that
+ * covers a tap that never pulls; this covers one that pulls and lies.)
+ */
+const SILENT_TAP_INIT = () => {
+  const real = URL.createObjectURL.bind(URL);
+  URL.createObjectURL = (obj: Blob | MediaSource) => {
+    if (obj instanceof Blob && obj.type === "application/javascript") {
+      return real(
+        new Blob(
+          [
+            `class PcmTap extends AudioWorkletProcessor {
+               constructor() { super(); this._i = 0; }
+               process(inputs) {
+                 this._i += (inputs[0] && inputs[0][0]) ? inputs[0][0].length : 128;
+                 while (this._i >= 1024) {
+                   this._i -= 1024;
+                   const b = new Float32Array(1024);
+                   this.port.postMessage({ channels: [b], frames: 1024 }, [b.buffer]);
+                 }
+                 return true;
+               }
+             }
+             registerProcessor('pcm-tap', PcmTap);`,
+          ],
+          { type: "application/javascript" }
+        )
+      );
+    }
+    return real(obj);
+  };
+};
+
+test("WebKit silence from the WebAudio tap falls back to an audible engine", async ({
+  page,
+}) => {
+  // The iPhone bug this guards: d7a0b52 taught the MediaRecorder fallback to
+  // hand WebKit the raw mic track, but the PRIMARY WebCodecs engine kept
+  // tapping its PCM off a WebAudio graph on every platform — so an iPhone
+  // whose WebAudio delivers silence muxed a normal-looking clip with an
+  // all-zero AAC track and no warning. The recorder now listens briefly on
+  // WebKit before committing; exact digital silence must push the whole job
+  // to MediaRecorder, whose WebKit branch records the raw, audible track.
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "userAgent", {
+      get: () =>
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+      configurable: true,
+    });
+  });
+  await page.addInitScript(SILENT_TAP_INIT);
+
+  await liveVideoStage(page);
+  await setScript(page, SCRIPT);
+
+  // No container assertions here: the point of the fallback is that it may be
+  // a different engine (possibly WebM on this build) — what matters, and what
+  // an unfixed recorder fails, is that the clip carries actual signal.
+  const { b64 } = await recordAndRead(page, 4);
+  const peak = await audioPeak(page, b64);
+  expect(typeof peak, `audioPeak said: ${peak}`).toBe("number");
+  expect(peak as number, "clip must not be silent").toBeGreaterThan(0.01);
+});
+
+test("a tap that delivers only digital silence is reported as no sound", async ({
+  page,
+}) => {
+  // Same silent tap, but on a platform that trusts WebAudio (no preflight, no
+  // fallback): the WebCodecs engine encodes the zero blocks. audioFrames is
+  // then > 0, so only the signal-level check can catch it — the clip must be
+  // saved AND flagged, never shipped as if it had sound.
+  await page.addInitScript(SILENT_TAP_INIT);
+
+  await liveVideoStage(page);
+  await setScript(page, SCRIPT);
+
+  await page.getByLabel("Start recording").click();
+  await expect(page.getByLabel("Stop recording")).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.waitForTimeout(3000);
+  await page.getByLabel("Stop recording").click();
+
+  await expect(page.getByText("YOUR SWITCH IS READY")).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(
+    page.getByRole("alert").filter({ hasText: /no sound/i })
+  ).toBeVisible();
+});
+
 test("a teleprompter take still records sound", async ({ page }) => {
   await liveVideoStage(page);
   await setScript(page, SCRIPT);

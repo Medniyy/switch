@@ -22,7 +22,11 @@
  * browsers without WebCodecs — nothing here removes that path.
  */
 import { ArrayBufferTarget, Muxer } from "mp4-muxer";
-import { createBoostedMicPcm, type MicPcm } from "./audio";
+import {
+  createBoostedMicPcm,
+  webAudioTrackIsUnreliable,
+  type MicPcm,
+} from "./audio";
 
 /** Opus at 128 kbps was the old target; AAC-LC at the same rate is transparent
  *  enough for voice and is what every editor expects to find in an MP4. */
@@ -48,6 +52,16 @@ const FLUSH_TIMEOUT_MS = 15_000;
 /** The startup probe encodes exactly one blank frame, so it should be near
  *  instant. Anything slower than this is a broken encoder, not a busy one. */
 const VALIDATE_TIMEOUT_MS = 3_000;
+
+/**
+ * How long the WebKit-only mic preflight listens before deciding the tap is
+ * dead. Long enough for the AudioWorklet to spin up and deliver a dozen-plus
+ * blocks; short enough to hide entirely inside the 3-2-1 countdown that
+ * already runs before recording starts.
+ */
+const MIC_PREFLIGHT_MS = 400;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** Resolve with `null` if `p` has not settled within `ms`. Rejections pass
  *  through untouched — a real error still deserves to be reported. */
@@ -309,6 +323,12 @@ export async function startMp4Recording(
   let mic: MicPcm | null = null;
   let audioEncoder: AudioEncoder | null = null;
   let audioFrames = 0; // running sample count → monotonic audio timestamps
+  // Loudest sample seen across the whole take. A live mic always carries a
+  // noise floor, so a peak of EXACTLY zero means the WebAudio graph delivered
+  // silence — WebKit's failure mode, where every API reports success and the
+  // samples are simply all 0. Tracked before the encoder guard on purpose, so
+  // the preflight below can read it while the encoder doesn't exist yet.
+  let audioPeak = 0;
 
   const frameDurationUs = Math.round(1_000_000 / fps);
   const keyframeInterval = Math.max(1, Math.round(fps * KEYFRAME_SECONDS));
@@ -326,6 +346,12 @@ export async function startMp4Recording(
   try {
     if (wantAudio) {
       mic = await createBoostedMicPcm(audioTrack!, (channels, frames) => {
+          for (const ch of channels) {
+            for (let i = 0; i < ch.length; i++) {
+              const a = ch[i] < 0 ? -ch[i] : ch[i];
+              if (a > audioPeak) audioPeak = a;
+            }
+          }
           const enc = audioEncoder;
           if (!enc || enc.state !== "configured" || finished) return;
           try {
@@ -363,6 +389,25 @@ export async function startMp4Recording(
       if (mic && !(await aacSupported(mic.sampleRate, mic.numberOfChannels))) {
         mic.close();
         mic = null;
+      }
+
+      // ⚠️ WebKit preflight. On iOS (and desktop Safari) mic audio routed
+      // through WebAudio can come out as pure silence while the context runs,
+      // the worklet pulls and every API reports success — the exact bug that
+      // made MediaRecorder clips silent until d7a0b52 handed WebKit the raw
+      // track. That fix never covered THIS path: the WebCodecs recorder taps
+      // its PCM off the same kind of WebAudio graph, so an affected device
+      // would happily mux an all-zero AAC track with no warning anywhere.
+      // Listen briefly before committing: a real mic shows a noise floor
+      // within a few blocks; exact digital silence means the graph is lying,
+      // so hand the whole job to MediaRecorder, whose WebKit path records the
+      // raw (audible) track. Chromium/Gecko skip this entirely.
+      if (mic && webAudioTrackIsUnreliable()) {
+        await sleep(MIC_PREFLIGHT_MS);
+        if (audioPeak === 0) {
+          mic.close();
+          mic = null;
+        }
       }
 
       // The user asked for sound and we cannot encode it here — either AAC
@@ -579,10 +624,15 @@ export async function startMp4Recording(
         if (!buffer) throw new Error("muxer produced no output");
         return {
           blob: new Blob([buffer], { type: "video/mp4" }),
-          // `audioFrames === 0` is the important half: a mic tap that never
-          // pulled (a suspended AudioContext, say) reports no error at all, it
-          // just quietly delivers nothing. Only an error check would miss it.
-          audioDropped: wantAudio && (audioFailed !== null || audioFrames === 0),
+          // `audioFrames === 0`: a mic tap that never pulled (a suspended
+          // AudioContext, say) reports no error at all, it just quietly
+          // delivers nothing. `audioPeak === 0`: the tap pulled, frames were
+          // encoded, and every sample was digital silence — WebKit's WebAudio
+          // failure mode slipping past the preflight, or a genuinely dead
+          // mic. Either way the clip has no sound and the user must be told.
+          audioDropped:
+            wantAudio &&
+            (audioFailed !== null || audioFrames === 0 || audioPeak === 0),
         };
       } finally {
         try {

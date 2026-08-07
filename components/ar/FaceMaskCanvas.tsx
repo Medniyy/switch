@@ -28,6 +28,8 @@ import {
 } from "@/lib/headAnimation";
 import { sanitizeFaceAnchors, type FaceAnchors } from "@/lib/faceAnchors";
 import { photoCutout } from "@/lib/aiCutout";
+import { removeBackground } from "@/lib/removeBackground";
+import { computeSubjectMatte } from "@/lib/subjectMatte";
 import { useAppStore, VIDEO_QUALITY } from "@/store/useAppStore";
 
 /** The mask draw of the most recent live frame, in CANVAS pixel space (pre-
@@ -183,6 +185,8 @@ export function FaceMaskCanvas({
       sanitizeFaceAnchors,
       CakeGame,
       photoCutout,
+      removeBackground,
+      computeSubjectMatte,
     };
   }, []);
 

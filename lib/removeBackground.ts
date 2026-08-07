@@ -1,42 +1,37 @@
 /**
- * Background removal for PFPs — a zero-dependency chroma-key cutout.
+ * Background removal for PFP art — zero dependencies, entirely on-device.
  *
- * SMB monkeys (and most PFPs) sit on a flat or gently-graded solid backdrop.
- * Rather than shipping a ~40MB ML segmentation model — a non-starter for the
- * mobile WebView build — we exploit that: sample the corners AND the edge
- * midpoints to learn the background palette (a gradient reads as several
- * related colours, e.g. Mad Lads' textured paper backdrops), then *flood-fill
- * inward from the edges*, clearing only the pixels that match one of those
- * reference colours AND are connected to the border.
+ * Two stages, and the split matters:
  *
- * The flood-fill is the important part. A naive "make every pixel near the
- * background colour transparent" would punch holes through a monkey whose fur
- * happens to match the backdrop. By only clearing pixels reachable from the
- * edge, an interior region of the same colour is left untouched.
+ *  1. HERE: learn which colours the backdrop is made of, by counting the
+ *     whole border ring and taking the dominant colour cluster (plus any
+ *     shade that chains onto it, so gradients are covered). This decides
+ *     which border pixels may seed the cutout — so a character crowding an
+ *     edge or a corner cannot seed the fill inside itself.
  *
- * Two safety rails keep busy art from being mangled:
- *  - a reference patch that no other patch corroborates (e.g. a hat poking into
- *    one corner) is dropped, so subject colours never key;
- *  - if too few border pixels match the surviving references, the background is
- *    not flat enough to key and we bail (`null`) so the caller keeps the
- *    original image.
+ *  2. lib/subjectMatte.ts: decide, per pixel, background or subject. That is
+ *     NOT a colour-distance test. It walks the image from the seeds and asks
+ *     whether a pixel can be reached without ever stepping over an edge,
+ *     which is the only formulation that survives both a graded backdrop and
+ *     a character whose own features share the backdrop's colour. Read that
+ *     file before touching either stage.
  *
- * Edges are feathered with a soft threshold band so the cutout doesn't look
- * like it was cut with scissors.
+ * We bail (`null`, caller keeps the original art) when the flood can barely
+ * enter from the border — a busy or photographic backdrop — or when the
+ * result clears almost nothing or almost everything, since neither is a
+ * cutout. Everything else is expected to key.
  *
  * The source must be CORS-clean (loaded with crossOrigin="anonymous"), which is
  * already required for canvas recording, so the result stays canvas-safe.
  */
 
+import { computeSubjectMatte } from "./subjectMatte";
+
 export interface CutoutOptions {
-  /** Hard match radius as a fraction of max RGB distance (0..1). Pixels this
-   *  close to the background colour become fully transparent. */
+  /** How close two sampled patches must be (fraction of max RGB distance) to
+   *  corroborate each other as backdrop. Governs seeding only — the per-pixel
+   *  decision is the matte's (see lib/subjectMatte.ts). */
   tolerance?: number;
-  /** Extra radius beyond `tolerance` used to feather the edge (0..1). Pixels in
-   *  this band get partial alpha for a soft boundary. */
-  softness?: number;
-  /** Corner patch size (px) averaged to estimate the background colour. */
-  cornerSample?: number;
   /** Crop the result to the subject's bounding box so the monkey fills the
    *  frame (and thus the face) once its background padding is removed. */
   crop?: boolean;
@@ -46,8 +41,6 @@ export interface CutoutOptions {
 
 const DEFAULTS: Required<CutoutOptions> = {
   tolerance: 0.16,
-  softness: 0.1,
-  cornerSample: 6,
   crop: true,
   cropPadding: 0.04,
 };
@@ -57,43 +50,7 @@ const MAX_DIST = Math.sqrt(3 * 255 * 255);
 
 type RGB = [number, number, number];
 
-/** Average an n×n patch anchored at (x0,y0) into an [r,g,b] triple. */
-function samplePatch(
-  data: Uint8ClampedArray,
-  w: number,
-  x0: number,
-  y0: number,
-  n: number
-): RGB {
-  let r = 0,
-    g = 0,
-    b = 0,
-    count = 0;
-  for (let y = y0; y < y0 + n; y++) {
-    for (let x = x0; x < x0 + n; x++) {
-      const i = (y * w + x) * 4;
-      r += data[i];
-      g += data[i + 1];
-      b += data[i + 2];
-      count++;
-    }
-  }
-  return [r / count, g / count, b / count];
-}
 
-/** Squared RGB distance from pixel `i` to its NEAREST reference colour. Squared
- *  (no sqrt) because it runs for every flood-filled pixel × every reference. */
-function minDist2(data: Uint8ClampedArray, i: number, refs: RGB[]): number {
-  let best = Infinity;
-  for (const c of refs) {
-    const dr = data[i] - c[0];
-    const dg = data[i + 1] - c[1];
-    const db = data[i + 2] - c[2];
-    const d2 = dr * dr + dg * dg + db * db;
-    if (d2 < best) best = d2;
-  }
-  return best;
-}
 
 /** Minimum fraction of border pixels that must match the background palette;
  *  below this the backdrop is treated as busy/photographic and we don't key.
@@ -102,15 +59,15 @@ function minDist2(data: Uint8ClampedArray, i: number, refs: RGB[]): number {
 const MIN_BORDER_MATCH = 0.35;
 
 /**
- * Returns a new canvas with the background knocked out, or `null` if the
- * background doesn't look flat enough to key cleanly (the four corners disagree)
- * so the caller can fall back to the original image.
+ * Returns a new canvas with the background knocked out, or `null` when this
+ * art cannot be keyed (busy backdrop, or a result that kept ~everything or
+ * ~nothing) so the caller can fall back to the original image.
  */
 export function removeBackground(
   source: HTMLImageElement | HTMLCanvasElement,
   options: CutoutOptions = {}
 ): HTMLCanvasElement | null {
-  const { tolerance, softness, cornerSample, crop, cropPadding } = {
+  const { tolerance, crop, cropPadding } = {
     ...DEFAULTS,
     ...options,
   };
@@ -138,82 +95,29 @@ export function removeBackground(
   }
   const data = imageData.data;
 
-  // Learn the background palette from the four corners plus the four edge
-  // midpoints, so a graded backdrop (each region a different shade) still keys.
-  const n = Math.min(cornerSample, Math.floor(Math.min(w, h) / 2));
-  if (n < 1) return null;
-  const midX = Math.floor((w - n) / 2);
-  const midY = Math.floor((h - n) / 2);
-  // Order matters: backgroundPalette() anchors on the first two (the top
-  // corners), so keep them first if you ever add or reorder patches.
-  const candidates: RGB[] = [
-    samplePatch(data, w, 0, 0, n), // top-left
-    samplePatch(data, w, w - n, 0, n), // top-right
-    samplePatch(data, w, 0, h - n, n), // bottom-left
-    samplePatch(data, w, w - n, h - n, n), // bottom-right
-    samplePatch(data, w, midX, 0, n), // top-mid
-    samplePatch(data, w, midX, h - n, n), // bottom-mid
-    samplePatch(data, w, 0, midY, n), // left-mid
-    samplePatch(data, w, w - n, midY, n), // right-mid
-  ];
-
   const hard = tolerance * MAX_DIST;
-  const soft = (tolerance + softness) * MAX_DIST;
-  const hard2 = hard * hard;
-  const soft2 = soft * soft;
 
-  const refs = backgroundPalette(candidates, hard);
+  // The palette is used ONLY to decide which border pixels may seed the flood
+  // (and as the backstop for "nothing like the backdrop"). The per-pixel
+  // keep/clear decision belongs to computeSubjectMatte, which walks the image
+  // instead of comparing colours to a global reference — see
+  // lib/subjectMatte.ts for why that distinction is the whole ballgame.
+  const refs = borderPalette(data, w, h, hard);
   if (refs.length === 0) return null;
 
-  // Flood fill from the border. `state`: 0 = unvisited, 1 = queued/cleared.
-  // While seeding, also measure how much of the border matches the palette —
-  // too little means a busy/photographic backdrop that keying would mangle.
-  const state = new Uint8Array(w * h);
-  const stack: number[] = [];
-  let borderMatch = 0;
-  let borderTotal = 0;
+  const matte = computeSubjectMatte(data, w, h, refs);
 
-  const pushEdge = (px: number, py: number) => {
-    const p = py * w + px;
-    borderTotal++;
-    if (minDist2(data, p * 4, refs) <= soft2) {
-      borderMatch++;
-      if (!state[p]) {
-        state[p] = 1;
-        stack.push(p);
-      }
-    }
-  };
-  for (let x = 0; x < w; x++) {
-    pushEdge(x, 0);
-    pushEdge(x, h - 1);
-  }
-  for (let y = 1; y < h - 1; y++) {
-    pushEdge(0, y);
-    pushEdge(w - 1, y);
-  }
-  if (borderMatch / borderTotal < MIN_BORDER_MATCH) return null;
+  // A backdrop the flood could barely enter is busy/photographic; keying it
+  // would mangle the art, so let the caller keep the original.
+  if (matte.borderSeeded < MIN_BORDER_MATCH) return null;
+  // Nothing removed, or nearly everything removed: either way this is not a
+  // cutout, and shipping it would be worse than the untouched square.
+  if (matte.clearedFraction < 0.02 || matte.clearedFraction > 0.94) return null;
 
-  while (stack.length) {
-    const p = stack.pop()!;
-    const i = p * 4;
-    const d2 = minDist2(data, i, refs);
 
-    if (d2 <= hard2) {
-      // Solid background — clear it and keep flooding outward.
-      data[i + 3] = 0;
-      const x = p % w;
-      const y = (p / w) | 0;
-      if (x > 0) tryPush(state, stack, data, p - 1, soft2, refs);
-      if (x < w - 1) tryPush(state, stack, data, p + 1, soft2, refs);
-      if (y > 0) tryPush(state, stack, data, p - w, soft2, refs);
-      if (y < h - 1) tryPush(state, stack, data, p + w, soft2, refs);
-    } else {
-      // Feather band — partially transparent, but don't flood past it so we
-      // don't eat into the subject. alpha 0 at `hard`, full at `soft`.
-      const t = (Math.sqrt(d2) - hard) / (soft - hard);
-      data[i + 3] = Math.round(255 * t);
-    }
+  for (let p = 0; p < w * h; p++) {
+    const a = matte.alpha[p];
+    if (a !== 255) data[p * 4 + 3] = Math.min(data[p * 4 + 3], a);
   }
 
   ctx.putImageData(imageData, 0, 0);
@@ -261,56 +165,6 @@ export function removeBackground(
   return out;
 }
 
-/**
- * Pick the background colours out of the eight sampled patches.
- *
- * A patch nobody else corroborates is probably the SUBJECT poking into it (a hat
- * in a corner), so it must never join the palette. On a flat/gently-graded
- * backdrop neighbouring patches agree WELL within the hard threshold, which is
- * why corroboration is deliberately tighter than `soft`: a 50/50 seam mix
- * between two distinct areas sits ~half their separation from each parent, can
- * sneak under `soft`, and would wrongly validate subject colours as background.
- *
- * Mutual corroboration ALONE isn't enough though. On a bust PFP the character
- * routinely fills the entire bottom edge, so the bottom-left, bottom-right and
- * bottom-mid patches all land on the same garment and cheerfully vouch for each
- * other — and the subject then keys itself out. (Sensei's pandas, whose robes
- * span the full width, hit this every time: the pale body became "background"
- * and the flood fill ate the face.)
- *
- * The two TOP corners are the one part of the frame a bust practically never
- * reaches, so when they agree we anchor on them and grow the palette outward: a
- * patch joins only once it is within `hard` of a colour already in the palette.
- * A graded backdrop still chains in shade by shade, while an isolated pair of
- * subject patches has no link back to the top and is left out.
- *
- * When the top corners DISAGREE there is no trustworthy anchor (the subject is
- * probably sitting in one of them), so we fall back to plain corroboration.
- */
-function backgroundPalette(candidates: RGB[], hard: number): RGB[] {
-  const corroborated = () =>
-    candidates.filter((c, i) =>
-      candidates.some((o, j) => j !== i && dist3(c, o) <= hard)
-    );
-
-  const [topLeft, topRight] = candidates;
-  if (dist3(topLeft, topRight) > hard) return corroborated();
-
-  // Seed with both top corners, then repeatedly admit any patch that matches
-  // something already admitted, until nothing new joins.
-  const inPalette = candidates.map((_, i) => i < 2);
-  for (let grew = true; grew; ) {
-    grew = false;
-    candidates.forEach((c, i) => {
-      if (inPalette[i]) return;
-      if (candidates.some((o, j) => inPalette[j] && dist3(c, o) <= hard)) {
-        inPalette[i] = true;
-        grew = true;
-      }
-    });
-  }
-  return candidates.filter((_, i) => inPalette[i]);
-}
 
 function dist3(a: RGB, b: RGB): number {
   const dr = a[0] - b[0];
@@ -319,17 +173,112 @@ function dist3(a: RGB, b: RGB): number {
   return Math.sqrt(dr * dr + dg * dg + db * db);
 }
 
-function tryPush(
-  state: Uint8Array,
-  stack: number[],
+
+/** Bins per channel when clustering border colours (16 → 4096 buckets). */
+const BIN_SHIFT = 4;
+const BINS = 1 << (8 - BIN_SHIFT);
+/** A cluster smaller than this share of the border is noise, not backdrop. */
+const MIN_CLUSTER_SHARE = 0.02;
+/** Share of the whole border a non-dominant cluster needs to anchor on its own. */
+const MIN_ANCHOR_SHARE = 0.08;
+/** Share of ONE edge a cluster must hold to count as present on it. */
+const EDGE_PRESENCE = 0.06;
+
+/**
+ * Learn the backdrop's colours from the whole border ring.
+ *
+ * This replaced sampling eight fixed patches (four corners + four edge
+ * midpoints) and keeping whichever ones corroborated each other. That
+ * heuristic had a blind spot it could not see past: it assumed the top
+ * corners belong to the backdrop. Claynosaurz breaks that assumption — its
+ * character sits in the TOP-LEFT — so the character's own teal was admitted
+ * as a background colour, the flood was seeded inside the dinosaur, and the
+ * cutout ate 93% of the art. Sampling more patches would only move the blind
+ * spot around.
+ *
+ * Counting the entire ring removes the assumption. Whatever colour occupies
+ * the most border is the backdrop, because a PFP character can crowd an edge
+ * or a corner but essentially never surrounds the frame. From that anchor the
+ * palette grows through neighbouring bins, so a graded backdrop still chains
+ * in shade by shade while an unrelated cluster (the character) never links up.
+ */
+function borderPalette(
   data: Uint8ClampedArray,
-  p: number,
-  soft2: number,
-  refs: RGB[]
-) {
-  if (state[p]) return;
-  if (minDist2(data, p * 4, refs) <= soft2) {
-    state[p] = 1;
-    stack.push(p);
+  w: number,
+  h: number,
+  hard: number
+): RGB[] {
+  type Bin = { n: number; r: number; g: number; b: number; edges: number[] };
+  const counts = new Map<number, Bin>();
+  const add = (p: number, edge: number) => {
+    const i = p * 4;
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const key =
+      ((r >> BIN_SHIFT) * BINS + (g >> BIN_SHIFT)) * BINS + (b >> BIN_SHIFT);
+    const slot = counts.get(key);
+    if (slot) {
+      slot.n++;
+      slot.r += r;
+      slot.g += g;
+      slot.b += b;
+      slot.edges[edge]++;
+    } else {
+      const edges = [0, 0, 0, 0];
+      edges[edge] = 1;
+      counts.set(key, { n: 1, r, g, b, edges });
+    }
+  };
+  for (let x = 0; x < w; x++) {
+    add(x, 0); // top
+    add((h - 1) * w + x, 1); // bottom
   }
+  for (let y = 1; y < h - 1; y++) {
+    add(y * w, 2); // left
+    add(y * w + w - 1, 3); // right
+  }
+
+  const total = 2 * w + 2 * (h - 2);
+  if (!total) return [];
+  const edgeLen = [w, w, h - 2, h - 2];
+
+  const clusters = [...counts.values()]
+    .filter((c) => c.n / total >= MIN_CLUSTER_SHARE)
+    .map((c) => ({
+      n: c.n,
+      rgb: [c.r / c.n, c.g / c.n, c.b / c.n] as RGB,
+      // How many of the four edges this colour meaningfully occupies.
+      sides: c.edges.filter((e, i) => e / edgeLen[i] >= EDGE_PRESENCE).length,
+    }))
+    .sort((a, b) => b.n - a.n);
+  if (!clusters.length) return [];
+
+  // Anchor on the dominant cluster, plus any other cluster that WRAPS the
+  // frame: a big share AND a presence on at least three of the four edges.
+  //
+  // That second rule is what lets a scene backdrop work. Hot Heads' pixel art
+  // is a landscape — orange sky across the top, slate mountains down both
+  // sides — two large clusters too far apart in colour to chain, so anchoring
+  // only on the dominant one left half the scene behind. The wrap test admits
+  // them while still rejecting a character: SMB's monkey puts 12.5% of its
+  // body on the border and The Bullpen's jersey 6%, but each touches only the
+  // BOTTOM edge, because a subject intrudes from one side while a background
+  // surrounds. Admitting either as a seed would key the character out.
+  const chosen = clusters.filter(
+    (c, i) => i === 0 || (c.n / total >= MIN_ANCHOR_SHARE && c.sides >= 3)
+  );
+  // Then grow through neighbouring shades so a gradient chains in.
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const c of clusters) {
+      if (chosen.includes(c)) continue;
+      if (chosen.some((o) => dist3(c.rgb, o.rgb) <= hard)) {
+        chosen.push(c);
+        grew = true;
+      }
+    }
+  }
+  return chosen.map((c) => c.rgb);
 }
+

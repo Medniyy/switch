@@ -146,11 +146,6 @@ export const COLLECTIONS: CollectionMeta[] = [
     tag: "Sensei",
     chain: "solana",
     accent: "#4E7CD6",
-    // The pandas sit on a near-black radial gradient and routinely wear BLACK
-    // (balaclavas, kabuto helmets, puffer jackets) — garment and backdrop are
-    // literally the same RGB and connected to the border, so no colour key can
-    // tell them apart. Seed the editor with the untouched art instead.
-    autoCutout: false,
     fetch: { via: "helius", meSymbol: "sensei" },
   },
   {
@@ -175,11 +170,6 @@ export const COLLECTIONS: CollectionMeta[] = [
     tag: "Bullpen",
     chain: "solana",
     accent: "#9BA83B",
-    // Measured 2026-08-07 in the editor: the backdrop is a strong olive
-    // VIGNETTE — near-black at the corners, bright olive behind the head. The
-    // palette anchors on the dark corners, so only ~13% of the frame keys and
-    // the bull is left sitting inside an olive disc. Seed untouched art.
-    autoCutout: false,
     fetch: {
       via: "helius",
       meSymbol: "the_bullpen",
@@ -195,18 +185,6 @@ export const COLLECTIONS: CollectionMeta[] = [
     tag: "Claynosaurz",
     chain: "solana",
     accent: "#4FC3E8",
-    // links.image is an extension-less GIF; the indexer prefers the static
-    // `avatars/…` PNG file DAS lists alongside it — a headshot render, and
-    // the better art to wear.
-    //
-    // Measured 2026-08-07 in the editor: those backdrops are pastel
-    // GRADIENTS, and on the paler ones (#5001's pink, #9999's lilac) the
-    // learned palette reaches far enough toward white to swallow the
-    // character's own eye-whites and teeth — the cutout comes back with holes
-    // punched through the face, which is far worse than an uncut square.
-    // Other tokens (#1) key beautifully, so it's per-token luck the registry
-    // can't express; take the safe seed and let the brush do the work.
-    autoCutout: false,
     fetch: { via: "helius", meSymbol: "claynosaurz" },
   },
   {
@@ -215,9 +193,6 @@ export const COLLECTIONS: CollectionMeta[] = [
     tag: "Hot Heads",
     chain: "solana",
     accent: "#FF5A1F",
-    // 1/1 pixel-art SCENES — skies, mountains, rooms — never a flat backdrop,
-    // so no colour key can isolate the character. Seed the editor untouched.
-    autoCutout: false,
     // No collection grouping (see fetch below) means no collection NFT to
     // read a cover from either — use the first token's art.
     coverFromToken: true,

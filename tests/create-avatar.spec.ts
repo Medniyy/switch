@@ -40,11 +40,16 @@ test("upload → wear → persisted on device → delete", async ({ page }) => {
     buffer: await fixturePng(),
   });
 
-  // The backdrop is flat, so the matte separates the shape automatically —
-  // no button-hunting required, which is the whole point of the UX.
-  await expect(page.getByText(/Background removed/i)).toBeVisible({
+  // Automatic still: a result is already on screen and WEAR IT is one tap.
+  // What we also pin here is the recovery path — neither engine can tell when
+  // it got the subject wrong, so whatever else succeeded is offered as an
+  // alternative rather than the user being stuck with a bad cutout.
+  await expect(page.getByRole("button", { name: "WEAR IT" })).toBeVisible({
     timeout: 60_000,
   });
+  await expect(
+    page.getByRole("button", { name: /KEEP ORIGINAL/i })
+  ).toBeVisible();
   await page.getByRole("button", { name: "WEAR IT" }).click();
 
   // Lands in the recorder actually wearing it (mask loaded from IndexedDB).

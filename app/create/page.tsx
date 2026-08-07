@@ -21,7 +21,11 @@ import {
 import { useRouter } from "next/navigation";
 import { ImagePlus, Trash2, ShieldCheck } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
-import { prepareArtwork, type PrepareVia } from "@/lib/prepareArtwork";
+import {
+  prepareArtwork,
+  type PreparedCandidate,
+  type PrepareVia,
+} from "@/lib/prepareArtwork";
 import {
   blobToImage,
   deleteSavedMask,
@@ -44,9 +48,10 @@ type Stage =
   | { kind: "processing" }
   | {
       kind: "preview";
-      cutout: HTMLCanvasElement | null; // null = nothing could be separated
-      original: HTMLCanvasElement;
-      via: PrepareVia;
+      /** Every result we got, best first — the user picks. */
+      options: PreparedCandidate[];
+      /** Open the picker straight away because the best guess looks off. */
+      suspicious: boolean;
     }
   | { kind: "saving" };
 
@@ -125,16 +130,18 @@ export default function CreatePage() {
           i.onerror = () => rej(new Error("not an image"));
           i.src = url;
         });
-        const original = squareCanvas(img);
-        // Exactly the pipeline collection art goes through: geometric matte
-        // first (a photo on a plain wall, a logo, a drawing), then the selfie
-        // segmenter (an actual portrait), then untouched.
-        const prepared = await prepareArtwork(img);
+        // An upload is a PHOTOGRAPH, so the model that understands people
+        // goes first here — the geometric matte knows edges, not bodies, and
+        // routing photos to it first is how a plausible-but-wrong cutout got
+        // to win silently. Whatever loses is kept as an alternative.
+        const prepared = await prepareArtwork(img, { preferSegmenter: true });
         setStage({
           kind: "preview",
-          cutout: prepared.via === "original" ? null : prepared.canvas,
-          original,
-          via: prepared.via,
+          options: [
+            { canvas: prepared.canvas, via: prepared.via, coverage: prepared.coverage },
+            ...prepared.alternatives,
+          ],
+          suspicious: prepared.suspicious,
         });
       } finally {
         URL.revokeObjectURL(url);
@@ -304,9 +311,8 @@ export default function CreatePage() {
 
         {stage.kind === "preview" && (
           <PreviewStage
-            cutout={stage.cutout}
-            via={stage.via}
-            original={stage.original}
+            options={stage.options}
+            suspicious={stage.suspicious}
             onWear={wear}
             onRetry={() => setStage({ kind: "idle" })}
           />
@@ -317,73 +323,88 @@ export default function CreatePage() {
 }
 
 function PreviewStage({
-  cutout,
-  via,
-  original,
+  options,
+  suspicious,
   onWear,
   onRetry,
 }: {
-  cutout: HTMLCanvasElement | null;
-  via: PrepareVia;
-  original: HTMLCanvasElement;
+  options: PreparedCandidate[];
+  suspicious: boolean;
   onWear: (c: HTMLCanvasElement) => void;
   onRetry: () => void;
 }) {
-  const [useCutout, setUseCutout] = useState(cutout !== null);
+  const [picked, setPicked] = useState(0);
   const viewRef = useRef<HTMLCanvasElement | null>(null);
+  const choice = options[picked] ?? options[0];
 
   // Blit the chosen result into the on-page canvas (checkerboard behind it
-  // so the cutout reads). The sources are drawn from, never modified.
+  // so transparency reads). The sources are drawn from, never modified.
   useEffect(() => {
     const view = viewRef.current;
-    if (!view) return;
-    const src = useCutout && cutout ? cutout : original;
+    const src = choice?.canvas;
+    if (!view || !src) return;
     view.width = src.width;
     view.height = src.height;
     const ctx = view.getContext("2d");
     if (!ctx) return;
     ctx.clearRect(0, 0, view.width, view.height);
     ctx.drawImage(src, 0, 0);
-  }, [useCutout, cutout, original]);
+  }, [choice]);
+
+  if (!choice) return null;
 
   return (
     <div className="mt-6 flex flex-col gap-4">
       <div className="aspect-square w-full overflow-hidden rounded-[var(--radius-card)] pixel-border bg-[conic-gradient(#22252b_0_25%,#181b20_0_50%,#22252b_0_75%,#181b20_0)] bg-[length:24px_24px]">
         <canvas ref={viewRef} className="h-full w-full" />
       </div>
-      {cutout === null && (
-        <p className="text-center text-sm text-cream/55">
-          We couldn&apos;t separate a subject in this image, so it stays as-is —
-          wear it and trim the background by hand in the mask editor.
-        </p>
-      )}
-      {cutout !== null && (
-        <p className="text-center text-sm text-cream/45">
-          Background removed {via === "segmenter" ? "with on-device segmentation" : "automatically"}.
-          Not right? Wear it and fix the edges in the mask editor.
-        </p>
-      )}
-      {cutout !== null && (
-        <div className="flex justify-center">
-          <button
-            onClick={() => setUseCutout(!useCutout)}
-            className="rounded-full border-[2px] border-cream/25 px-4 py-2 font-[family-name:var(--font-display)] text-[10px] text-cream/70 active:scale-[0.98]"
-          >
-            {useCutout ? "SHOW ORIGINAL" : "SHOW CUTOUT"}
-          </button>
+
+      {/* The whole point: neither engine can tell when it got the subject
+          wrong, so rather than shipping a silent bad cutout we show what
+          each one produced and let the person looking at it choose. */}
+      {options.length > 1 && (
+        <div className="flex flex-col gap-2">
+          <p className="text-center text-sm text-cream/55">
+            {suspicious
+              ? "This one looks off — try another version:"
+              : "Not quite right? Try another version:"}
+          </p>
+          <div className="flex gap-2">
+            {options.map((o, i) => (
+              <button
+                key={o.via}
+                onClick={() => setPicked(i)}
+                aria-pressed={picked === i}
+                className={`flex-1 rounded-full border-[2px] py-2.5 font-[family-name:var(--font-display)] text-[10px] transition-colors active:scale-[0.98] ${
+                  picked === i
+                    ? "border-banana bg-banana text-screen"
+                    : "border-cream/25 bg-white/5 text-cream/70"
+                }`}
+              >
+                {VIA_LABEL[o.via]}
+              </button>
+            ))}
+          </div>
         </div>
       )}
+
       <div className="flex gap-2">
         <PixelButton variant="secondary" className="flex-1" onClick={onRetry}>
           PICK ANOTHER
         </PixelButton>
-        <PixelButton
-          className="flex-1"
-          onClick={() => onWear(useCutout && cutout ? cutout : original)}
-        >
+        <PixelButton className="flex-1" onClick={() => onWear(choice.canvas)}>
           WEAR IT
         </PixelButton>
       </div>
+      <p className="text-center text-xs text-cream/40">
+        You can still fix the edges by hand in the mask editor.
+      </p>
     </div>
   );
 }
+
+const VIA_LABEL: Record<PrepareVia, string> = {
+  segmenter: "AI CUTOUT",
+  matte: "EDGE CUTOUT",
+  original: "KEEP ORIGINAL",
+};

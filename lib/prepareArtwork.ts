@@ -4,41 +4,65 @@
  * asset. Collections and custom uploads deliberately share this path so a
  * fix or a regression lands on both at once.
  *
- * It always returns a canvas. When nothing can separate a subject it returns
- * the untouched art with `via: "original"`, so callers never have to handle a
- * null and the UI can simply say so and offer the brush editor.
+ * It always returns a result, and it returns the REJECTED candidates too.
+ * That matters: neither engine can tell you reliably when it got the subject
+ * wrong (a fragmentation quality gate was tried and thrown away — it
+ * rejected good cutouts and passed bad ones), so instead of guessing we hand
+ * the alternatives to the UI and let the person looking at the picture
+ * decide. A bad cutout becomes one tap to fix rather than a dead end.
  *
- * Strategy, cheapest first — every stage is on-device, nothing is uploaded:
+ * Two engines, on-device, nothing uploaded:
  *
- *  1. "matte" — the geometric cutout (lib/subjectMatte.ts). No model, no
- *     download, tens of milliseconds. This is the right tool for PFP art,
- *     which by construction sits on a DESIGNED backdrop: flat, graded, or
- *     textured, but authored to sit behind a character.
- *  2. "segmenter" — MediaPipe's selfie segmenter (250KB, Apache-2.0, fetched
- *     lazily and only if stage 1 declined). This is the right tool for
- *     photographs of people, which is what a custom upload usually is.
- *  3. "original" — untouched, and the caller says so.
+ *  - "matte" — the geometric cutout (lib/subjectMatte.ts). No model, no
+ *    download, tens of milliseconds. It knows about EDGES, not subjects: it
+ *    asks whether a pixel can be reached from the border without crossing
+ *    one. Ideal for PFP art, which sits on a designed backdrop by
+ *    construction. Its failure modes both come from that same blind spot —
+ *    a soft or low-contrast outline lets it walk into the character, and a
+ *    backdrop that is a SCENE has no single answer for it to find.
+ *  - "segmenter" — MediaPipe's selfie segmenter (250KB, Apache-2.0, fetched
+ *    lazily). This one genuinely knows what a PERSON is, which is exactly
+ *    the knowledge the matte lacks, so it is the right tool for a photo.
  *
- * On the models we did NOT use, since it is easy to re-litigate this:
+ * Which goes first is decided by the CALLER, because it depends on what the
+ * image is, and the caller is the only one who knows. `preferSegmenter` is
+ * what an upload passes: a photo routed matte-first would often produce a
+ * plausible-looking-but-wrong result, "succeed", and the model that actually
+ * understands bodies would never get a turn.
+ *
+ * On the models we did NOT use, since it is easy to re-litigate:
  *   - RMBG-1.4 is excellent and NON-COMMERCIAL; its licence rules it out.
- *   - @imgly/background-removal is AGPL-3.0, which is a licence decision for
- *     the whole app, not a library choice.
- *   - DeepLabV3 (Apache-2.0, already downloadable) was measured directly on
- *     Sensei/SMB/Claynosaurz/Bullpen art: it bailed on 4 of 6 and returned
- *     swiss-cheese mattes on the rest, because it is trained on photographs
- *     and a stylised character is out of its distribution. Stage 1 beats it
- *     on this art at a fraction of the cost.
+ *   - @imgly/background-removal is AGPL-3.0 — a decision about the whole
+ *     app, not a library choice.
+ *   - DeepLabV3 (Apache-2.0) was measured directly on Sensei/SMB/
+ *     Claynosaurz/Bullpen art: it bailed on 4 of 6 and returned swiss-cheese
+ *     mattes on the rest. Trained on photographs; stylised characters are out
+ *     of its distribution.
+ *   - U²-Netp via onnxruntime-web (Apache-2.0 + MIT) is the researched next
+ *     step for "knows what a subject is, on ARBITRARY art" — see
+ *     BACKGROUND-REMOVAL.md.
  */
 import { removeBackground } from "./removeBackground";
 import { photoCutout } from "./aiCutout";
 
 export type PrepareVia = "matte" | "segmenter" | "original";
 
-export interface PreparedArtwork {
+export interface PreparedCandidate {
   canvas: HTMLCanvasElement;
   via: PrepareVia;
   /** Fraction of the frame kept as subject (1 when nothing was removed). */
   coverage: number;
+}
+
+export interface PreparedArtwork extends PreparedCandidate {
+  /** Every other result we produced, best first, always ending in the
+   *  untouched original. The UI offers these when the primary looks wrong. */
+  alternatives: PreparedCandidate[];
+  /** True when the primary is worth a second look — an implausible amount
+   *  kept or removed, or nothing separated at all. Not a verdict, a nudge:
+   *  we have no reliable way to detect a mangled subject, so this only opens
+   *  the choice rather than overriding it. */
+  suspicious: boolean;
 }
 
 function toCanvas(
@@ -58,10 +82,6 @@ function toCanvas(
 
 /** Fraction of pixels that are meaningfully opaque. */
 function opaqueFraction(canvas: HTMLCanvasElement): number {
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) return 1;
-  // Sampling a downscaled copy: this is a sanity number, not a measurement
-  // that needs every pixel, and it keeps the check off the critical path.
   const S = 128;
   const t = document.createElement("canvas");
   t.width = S;
@@ -78,44 +98,84 @@ function opaqueFraction(canvas: HTMLCanvasElement): number {
 export interface PrepareOptions {
   /** Allow the ML fallback. Off for callers that must stay instant. */
   allowSegmenter?: boolean;
+  /** Run the segmenter FIRST and prefer it. Pass true for photographs (any
+   *  custom upload); leave false for collection art. */
+  preferSegmenter?: boolean;
   /** Crop to the subject once its background is gone. */
   crop?: boolean;
 }
 
+/** Keeping almost everything, or almost nothing, is rarely a real cutout. */
+const LOW_COVERAGE = 0.1;
+const HIGH_COVERAGE = 0.9;
+
 export async function prepareArtwork(
   source: HTMLImageElement | HTMLCanvasElement,
-  { allowSegmenter = true, crop = true }: PrepareOptions = {}
+  {
+    allowSegmenter = true,
+    preferSegmenter = false,
+    crop = true,
+  }: PrepareOptions = {}
 ): Promise<PreparedArtwork> {
-  // 1. Geometric matte.
+  const matte = await runMatte(source, crop);
+  // Run the model when it is preferred, or when the cheap path came back
+  // empty-handed. Skipping it whenever the matte "succeeded" is precisely
+  // what hid the good result on photographs.
+  const wantSegmenter =
+    allowSegmenter && (preferSegmenter || !matte || isSuspect(matte));
+  const segmented = wantSegmenter ? await runSegmenter(source) : null;
+
+  const ordered: PreparedCandidate[] = preferSegmenter
+    ? [segmented, matte].filter(Boolean as unknown as (c: PreparedCandidate | null) => c is PreparedCandidate)
+    : [matte, segmented].filter(Boolean as unknown as (c: PreparedCandidate | null) => c is PreparedCandidate);
+
+  const plain = toCanvas(source);
+  if (plain) {
+    ordered.push({ canvas: plain, via: "original", coverage: 1 });
+  }
+  if (!ordered.length) {
+    return {
+      canvas: document.createElement("canvas"),
+      via: "original",
+      coverage: 1,
+      alternatives: [],
+      suspicious: false,
+    };
+  }
+
+  const [primary, ...alternatives] = ordered;
+  return {
+    ...primary,
+    alternatives,
+    suspicious: primary.via === "original" || isSuspect(primary),
+  };
+}
+
+function isSuspect(c: PreparedCandidate) {
+  return c.coverage < LOW_COVERAGE || c.coverage > HIGH_COVERAGE;
+}
+
+async function runMatte(
+  source: HTMLImageElement | HTMLCanvasElement,
+  crop: boolean
+): Promise<PreparedCandidate | null> {
   try {
     const keyed = removeBackground(source, { crop });
-    if (keyed) {
-      return { canvas: keyed, via: "matte", coverage: opaqueFraction(keyed) };
-    }
+    if (!keyed) return null;
+    return { canvas: keyed, via: "matte", coverage: opaqueFraction(keyed) };
   } catch {
-    /* fall through — a cutout failing must never break preparation */
+    return null; // a cutout failing must never break preparation
   }
+}
 
-  // 2. ML segmenter (people).
-  if (allowSegmenter) {
-    try {
-      const cut = await photoCutout(source);
-      if (cut) {
-        return {
-          canvas: cut.canvas,
-          via: "segmenter",
-          coverage: cut.coverage,
-        };
-      }
-    } catch {
-      /* same — best effort */
-    }
+async function runSegmenter(
+  source: HTMLImageElement | HTMLCanvasElement
+): Promise<PreparedCandidate | null> {
+  try {
+    const cut = await photoCutout(source);
+    if (!cut) return null;
+    return { canvas: cut.canvas, via: "segmenter", coverage: cut.coverage };
+  } catch {
+    return null;
   }
-
-  // 3. Untouched.
-  const plain = toCanvas(source);
-  if (plain) return { canvas: plain, via: "original", coverage: 1 };
-  // Only reachable for a zero-sized source; hand back an empty canvas rather
-  // than throwing into a UI that has nothing to show for it.
-  return { canvas: document.createElement("canvas"), via: "original", coverage: 1 };
 }

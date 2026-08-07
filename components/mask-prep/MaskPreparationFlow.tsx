@@ -767,6 +767,8 @@ function MaskPrepEditor({
   // Manual background removal (see removeBackgroundNow).
   const [cutting, setCutting] = useState(false);
   const [cutMessage, setCutMessage] = useState<string | null>(null);
+  /** Alternates which engine removeBackgroundNow tries (see there). */
+  const cutAttemptRef = useRef(0);
   const [cursor, setCursor] = useState<Point | null>(null);
   const [hintVisible, setHintVisible] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1046,13 +1048,25 @@ function MaskPrepEditor({
       snapshot.height = editCanvas.height;
       snapshot.getContext("2d")?.drawImage(editCanvas, 0, 0);
 
-      const prepared = await prepareArtwork(snapshot, { crop: false });
+      // Alternate between the engines on repeat presses. Neither can tell
+      // when it got the subject wrong, so the button doubles as "try the
+      // other way" rather than recomputing the same disappointing answer.
+      const prepared = await prepareArtwork(snapshot, {
+        crop: false,
+        preferSegmenter: cutAttemptRef.current % 2 === 1,
+      });
+      cutAttemptRef.current += 1;
       if (prepared.via === "original") {
         setCutMessage(
           "Couldn't find a subject to separate here — erase the background with the brush instead."
         );
         return;
       }
+      setCutMessage(
+        prepared.suspicious
+          ? "That looks off — press Remove background again to try the other method, or Undo."
+          : "Press again to try the other method if this isn't right."
+      );
 
       const out = document.createElement("canvas");
       out.width = editCanvas.width;
@@ -1068,7 +1082,6 @@ function MaskPrepEditor({
 
       editDataRef.current = data;
       ctx.putImageData(data, 0, 0);
-      setCutMessage(null);
       setHistoryCount(historyRef.current.length);
       setRedoCount(0);
       setDirty(true);

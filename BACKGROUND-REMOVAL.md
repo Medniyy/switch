@@ -70,6 +70,29 @@ Cost of that path: a real dependency and a multi-MB lazy download for two
 collections. Worth prototyping against Claynosaurz + Hot Heads specifically
 before committing — per the brief, judged on our art, not on demos.
 
+## When it gets the subject wrong (2026-08-08)
+
+Neither engine can reliably tell you it failed — a fragmentation quality gate
+was built and removed because it rejected the good Bullpen cutout while
+passing the mangled Claynosaurz one. So the handling is: **route better, and
+make failure a tap to fix instead of a dead end.**
+
+1. **Routing follows what the image IS.** `prepareArtwork` takes
+   `preferSegmenter`, and uploads pass it. A photo routed matte-first often
+   produced a plausible-looking-but-wrong cutout, "succeeded", and the model
+   that actually understands bodies never ran. Collection art still goes
+   matte-first, where it belongs.
+2. **Losers are kept, not discarded.** `prepareArtwork` returns
+   `alternatives` (every other engine that produced something, always ending
+   in the untouched original) plus a `suspicious` flag for an implausible
+   amount kept or removed. /create shows them as EDGE CUTOUT / AI CUTOUT /
+   KEEP ORIGINAL; the editor's "Remove background" alternates engines on
+   repeat presses.
+
+This does not make a bad cutout good. It makes it recoverable without the
+brush, which is the honest thing we can do before adding a model that
+understands subjects generally (U²-Netp, above).
+
 ## Performance / UX properties the brief asked for
 
 - **Lazy, never bulk.** Processing happens when a token is prepared, never

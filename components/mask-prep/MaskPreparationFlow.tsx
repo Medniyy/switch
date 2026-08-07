@@ -44,6 +44,7 @@ import {
   type SavedUserMask,
 } from "@/lib/userMasks";
 import { usesAutoCutout } from "@/lib/collections";
+import { detectFaceAnchors } from "@/lib/faceAnchors";
 import { MASK_SOURCE_WIDTH } from "@/lib/imageSrc";
 import { useHeadMask } from "@/components/ar/useHeadMask";
 import { useNFTImage } from "@/components/ar/useNFTImage";
@@ -190,6 +191,14 @@ export function MaskPreparationFlow({
     async ({ blob, type, image, maskMode, maskFlip, fit }: EditorCompletePayload) => {
       const now = Date.now();
       const key = nftMaskKey(nft);
+      // Find the ART's own eyes/mouth for the T2 mouth/blink imitation.
+      // Best-effort and re-run on every save (the user may have erased or
+      // restored the face region since last time). Manual pins survive only
+      // when auto-detection finds nothing to replace them with.
+      const faceAnchors =
+        (await detectFaceAnchors(image).catch(() => null)) ??
+        existingRecord?.faceAnchors ??
+        null;
       const record: SavedUserMask = {
         key,
         collectionId: nft.collection,
@@ -204,6 +213,7 @@ export function MaskPreparationFlow({
         anchorOffsetY: fit.anchorOffsetY,
         scaleOffset: fit.scaleOffset,
         placement: starting.placement,
+        faceAnchors,
         createdAt: existingRecord?.createdAt ?? now,
         updatedAt: now,
         version: USER_MASK_VERSION,
@@ -219,7 +229,13 @@ export function MaskPreparationFlow({
         onComplete({ record, image, persisted: false, warning });
       }
     },
-    [existingRecord?.createdAt, nft, onComplete, starting.placement]
+    [
+      existingRecord?.createdAt,
+      existingRecord?.faceAnchors,
+      nft,
+      onComplete,
+      starting.placement,
+    ]
   );
 
   // "Keep full character": use the automatically prepared transparent art exactly

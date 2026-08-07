@@ -17,10 +17,15 @@ import type { MaskFit } from "@/lib/userMasks";
 import { BananaField } from "@/lib/bananaRain";
 import {
   computeIdleMotion,
+  computeMouthSlices,
   expressionFromBlendshapes,
+  lidClose,
+  LID_RX,
+  LID_RY,
   NEUTRAL_EXPRESSION,
   type LiveExpression,
 } from "@/lib/headAnimation";
+import { sanitizeFaceAnchors, type FaceAnchors } from "@/lib/faceAnchors";
 import { useAppStore, VIDEO_QUALITY } from "@/store/useAppStore";
 
 /** The mask draw of the most recent live frame, in CANVAS pixel space (pre-
@@ -47,6 +52,9 @@ interface FaceMaskCanvasProps {
   /** When set, `nftImage` is a precomputed head mask, placed + rotated by its own
    *  facial anchor/scale (see computeMaskTransform) instead of a centered box. */
   placement?: MaskPlacement | null;
+  /** The art's own eye/mouth positions (per-mask, from the saved record).
+   *  Enables the T2 mouth/blink imitation; null keeps the draw T1-only. */
+  faceAnchors?: FaceAnchors | null;
   maskFlip?: boolean;
   fit?: MaskFit;
   /** Written every frame with the latest mask draw (see LiveMaskTrack). Must be
@@ -93,6 +101,7 @@ export function FaceMaskCanvas({
   canvasRef,
   nftImage,
   placement = null,
+  faceAnchors = null,
   maskFlip = false,
   fit = { anchorOffsetX: 0, anchorOffsetY: 0, scaleOffset: 0 },
   trackRef,
@@ -116,6 +125,7 @@ export function FaceMaskCanvas({
   const lastFrameRef = useRef(0);
   const nftRef = useRef(nftImage);
   const placementRef = useRef(placement);
+  const anchorsRef = useRef(faceAnchors);
   const faceRef = useRef<boolean | null>(null);
   const debugCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -140,6 +150,7 @@ export function FaceMaskCanvas({
   }, [bananaRain]);
   useEffect(() => { nftRef.current = nftImage; }, [nftImage]);
   useEffect(() => { placementRef.current = placement; }, [placement]);
+  useEffect(() => { anchorsRef.current = faceAnchors; }, [faceAnchors]);
 
   // Dev/test-only seam: expose the pure tracking-transform functions so tests can
   // feed synthetic landmarks and verify head-roll rotation + rotation-invariant
@@ -157,6 +168,9 @@ export function FaceMaskCanvas({
       BASE_COVERAGE_SCALE,
       computeIdleMotion,
       expressionFromBlendshapes,
+      computeMouthSlices,
+      lidClose,
+      sanitizeFaceAnchors,
     };
   }, []);
 
@@ -302,7 +316,70 @@ export function FaceMaskCanvas({
           ctx.rotate(smoothed.rotation);
           if (maskFlip) ctx.scale(-1, 1);
           ctx.scale(motion.scaleX, motion.scaleY);
-          ctx.drawImage(img, -anchorX * dw, -(anchorY + MASK_UP_NUDGE) * dw, dw, dw);
+          // T2 — the art's own mouth and eyes move with the wearer's, when
+          // this mask carries anchors. Engaged only while a feature is
+          // actually moving; the resting frame stays the exact single
+          // drawImage every anchor-less mask always gets, so a mask with no
+          // anchors (or liveliness 0) cannot ever be warped.
+          const anchors = sanitizeFaceAnchors(anchorsRef.current);
+          const jaw = Math.min(1, expression.jawOpen * 1.6); // full drop before the jaw's real max
+          const lid = lidClose(expression.blink);
+          const left = -anchorX * dw;
+          const top = -(anchorY + MASK_UP_NUDGE) * dw;
+          const animating =
+            !!anchors && liveliness > 0 && (jaw > 0.03 || lid > 0.01);
+          if (!animating) {
+            ctx.drawImage(img, left, top, dw, dw);
+          } else {
+            const ih = img.naturalHeight;
+            const iw = img.naturalWidth;
+            const { y0, y1, drop } = computeMouthSlices(
+              anchors.mouth.y,
+              ih,
+              dw,
+              jaw,
+              liveliness
+            );
+            if (drop > 0) {
+              const sy = dw / ih;
+              // Top of the head, untouched.
+              ctx.drawImage(img, 0, 0, iw, y0, left, top, dw, y0 * sy);
+              // Mouth band, stretched taller by `drop`.
+              ctx.drawImage(
+                img, 0, y0, iw, y1 - y0,
+                left, top + y0 * sy, dw, (y1 - y0) * sy + drop
+              );
+              // Chin and below, pushed down by the same amount.
+              ctx.drawImage(
+                img, 0, y1, iw, ih - y1,
+                left, top + y1 * sy + drop, dw, (ih - y1) * sy
+              );
+            } else {
+              ctx.drawImage(img, left, top, dw, dw);
+            }
+            if (lid > 0.01) {
+              // Eyelids: art-coloured ellipses scaling in over each eye. The
+              // colour was sampled from just above the eye at save time, so
+              // the lid reads as this character's skin, not a grey shutter.
+              ctx.globalAlpha = opacity * Math.min(1, lid * 1.4);
+              for (const [eye, color] of [
+                [anchors.eyeL, anchors.lidL],
+                [anchors.eyeR, anchors.lidR],
+              ] as const) {
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.ellipse(
+                  left + eye.x * dw,
+                  top + eye.y * dw,
+                  LID_RX * dw * liveliness,
+                  LID_RY * dw * lid * liveliness,
+                  0, 0, Math.PI * 2
+                );
+                ctx.fill();
+              }
+              ctx.globalAlpha = opacity;
+            }
+          }
           ctx.restore();
           if (trackRef) {
             trackRef.current = {

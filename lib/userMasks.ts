@@ -1,5 +1,6 @@
 import type { NFT } from "@/lib/types";
 import { sanitizePlacement, type MaskPlacement } from "@/lib/imageUtils";
+import type { FaceAnchors } from "@/lib/faceAnchors";
 
 /**
  * v2 (2026-07-13): placement metadata is now validated. Records written before
@@ -40,6 +41,11 @@ export interface SavedUserMask {
   anchorOffsetY: number;
   scaleOffset: number;
   placement: MaskPlacement | null;
+  /** Where the ART's own eyes/mouth sit in the mask bitmap — drives the T2
+   *  mouth/blink imitation (lib/headAnimation.ts). Absent or null = feature
+   *  animation off for this mask; T1 breathing is unaffected. Optional so
+   *  records saved before this field existed keep loading unchanged. */
+  faceAnchors?: FaceAnchors | null;
   createdAt: number;
   updatedAt: number;
   version: number;

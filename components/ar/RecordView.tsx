@@ -24,6 +24,8 @@ import { useFaceMesh } from "./useFaceMesh";
 import { FaceMaskCanvas, type LiveMaskTrack } from "./FaceMaskCanvas";
 import { MASK_UP_NUDGE } from "@/lib/imageUtils";
 import { MaskSettings, MaskQuickToggles } from "./MaskControls";
+import { ExpressionPinsSheet } from "./ExpressionPinsSheet";
+import type { FaceAnchors } from "@/lib/faceAnchors";
 import { RecordButton } from "./RecordButton";
 import { useMediaRecorder } from "@/components/recorder/useMediaRecorder";
 import { VideoPreview } from "@/components/recorder/VideoPreview";
@@ -109,6 +111,7 @@ export function RecordView() {
 
   const [faceDetected, setFaceDetected] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [pinsOpen, setPinsOpen] = useState(false);
   const [captured, setCaptured] = useState<CapturedPhoto | null>(null);
   // Where the mask sat on the face at shutter time — seeds the editor's
   // pre-placed PFP for camera captures (null = centered, e.g. uploads).
@@ -354,6 +357,30 @@ export function RecordView() {
     setMaskLoadStatus("missing");
   }, [selectedNFT]);
 
+  // Save manually-pinned (or cleared) face anchors for the T2 mouth/blink
+  // imitation. Same persistence pattern as the flip toggle: state updates
+  // immediately, storage is best-effort.
+  const saveFaceAnchors = useCallback(
+    (faceAnchors: FaceAnchors | null) => {
+      setPinsOpen(false);
+      if (!runtimeMask) return;
+      const nextRecord: SavedUserMask = {
+        ...runtimeMask.record,
+        faceAnchors,
+        updatedAt: Date.now(),
+      };
+      setRuntimeMask({ ...runtimeMask, record: nextRecord });
+      if (runtimeMask.persisted) {
+        void saveUserMask(nextRecord).catch(() => {
+          setMaskLoadMessage(
+            "Face pins changed for this session. Browser storage could not update them."
+          );
+        });
+      }
+    },
+    [runtimeMask]
+  );
+
   const toggleMaskFlip = useCallback(() => {
     if (!runtimeMask) return;
     const nextRecord: SavedUserMask = {
@@ -442,6 +469,7 @@ export function RecordView() {
             canvasRef={canvasRef}
             nftImage={runtimeMask?.image ?? null}
             placement={runtimeMask?.record.placement ?? null}
+            faceAnchors={runtimeMask?.record.faceAnchors ?? null}
             maskFlip={runtimeMask?.record.maskFlip ?? false}
             fit={preparedFit}
             trackRef={liveTrackRef}
@@ -901,6 +929,15 @@ export function RecordView() {
               </div>
               <MaskSettings />
               <button
+                onClick={() => {
+                  setSettingsOpen(false);
+                  setPinsOpen(true);
+                }}
+                className="mt-5 w-full rounded-full border-[2px] border-banana/50 bg-banana/10 py-3 font-[family-name:var(--font-display)] text-[10px] text-banana active:scale-[0.98]"
+              >
+                FACE PINS · MOUTH &amp; BLINK
+              </button>
+              <button
                 onClick={resetCurrentNFT}
                 className="mt-5 w-full rounded-full border-[2px] border-pixelred/60 bg-pixelred/10 py-3 font-[family-name:var(--font-display)] text-[10px] text-pixelred active:scale-[0.98]"
               >
@@ -908,6 +945,16 @@ export function RecordView() {
               </button>
             </div>
           </div>
+        )}
+
+        {/* Face pins (T2 mouth/blink anchors) */}
+        {pinsOpen && !anyResult && !inEditor && runtimeMask && (
+          <ExpressionPinsSheet
+            image={runtimeMask.image}
+            anchors={runtimeMask.record.faceAnchors ?? null}
+            onSave={saveFaceAnchors}
+            onClose={() => setPinsOpen(false)}
+          />
         )}
       </div>
     </div>

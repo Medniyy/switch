@@ -99,6 +99,64 @@ export function computeIdleMotion(
   return { offsetY, scaleX, scaleY };
 }
 
+// ---------------------------------------------------------------------------
+// T2 — feature imitation. Everything below needs per-mask anchors (see
+// lib/faceAnchors.ts) and is therefore OPT-IN per mask: no anchors, no warp.
+
+/** How far the chin drops at a fully open jaw, as a fraction of drawWidth. */
+export const JAW_DROP_FRAC = 0.09;
+/** Half-height of the stretched mouth band, as a fraction of the bitmap. */
+export const MOUTH_BAND_HALF = 0.075;
+/** Eyelid ellipse radii as fractions of drawWidth. */
+export const LID_RX = 0.085;
+export const LID_RY = 0.075;
+
+/**
+ * Map the raw eyeBlink blendshape to eyelid closure. Idle eyes hover around
+ * 0.1–0.25 on this signal; without a dead zone the lids would flutter
+ * constantly. 0.3→0.75 maps to a full close so a natural blink still lands.
+ */
+export function lidClose(blink: number): number {
+  const t = (clamp01(blink) - 0.3) / 0.45;
+  return clamp01(t);
+}
+
+export interface MouthSlices {
+  /** Source split rows in bitmap px: [0,y0) top, [y0,y1) band, [y1,h) chin. */
+  y0: number;
+  y1: number;
+  /** Extra height (canvas px) the band gains and the chin translates by. */
+  drop: number;
+}
+
+/**
+ * Slice geometry for the jaw-drop warp: the bitmap is drawn in three
+ * horizontal slices, with the band around the mouth stretched by `drop` and
+ * everything below translated down by the same amount — the classic 2D
+ * puppet jaw, done with plain drawImage calls.
+ *
+ * `drop === 0` (mouth closed, or liveliness 0) must reproduce the identity:
+ * the three slices then partition the source exactly with unscaled
+ * destinations, which callers use to skip slicing entirely.
+ */
+export function computeMouthSlices(
+  mouthY: number,
+  bitmapH: number,
+  drawWidth: number,
+  jawOpen: number,
+  intensity = 1
+): MouthSlices {
+  const k = clamp01(intensity);
+  const jaw = clamp01(jawOpen);
+  const y0 = Math.round(
+    Math.min(Math.max((mouthY - MOUTH_BAND_HALF) * bitmapH, 1), bitmapH - 2)
+  );
+  const y1 = Math.round(
+    Math.min(Math.max((mouthY + MOUTH_BAND_HALF) * bitmapH, y0 + 1), bitmapH - 1)
+  );
+  return { y0, y1, drop: jaw * k * JAW_DROP_FRAC * drawWidth };
+}
+
 /**
  * Pull the two signals we use out of a MediaPipe blendshape category list.
  *

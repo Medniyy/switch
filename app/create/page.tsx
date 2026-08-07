@@ -39,13 +39,28 @@ import {
 } from "@/lib/userMasks";
 import { PixelButton } from "@/components/ui/PixelButton";
 import { BlinkingCursor } from "@/components/ui/BlinkingCursor";
+import { isModelCached, prefetchModel } from "@/lib/modelPrefetch";
+import { BASE_PATH } from "@/lib/basePath";
+
+/** The subject model the upload path uses. Downloaded once per device. */
+const SEGMENTER_URL = `${BASE_PATH}/mediapipe/selfie_segmenter.tflite`;
+
+/** What the user is told while they wait. Named stages, not a spinner: the
+ *  download is a genuine one-time cost and the work after it is real, so the
+ *  honest thing is to say which part is happening. */
+type PrepStep = "downloading" | "finding" | "polishing";
+const STEP_LABEL: Record<PrepStep, string> = {
+  downloading: "GETTING THE CUTOUT MODEL",
+  finding: "FINDING YOU IN THE PHOTO",
+  polishing: "POLISHING THE EDGES",
+};
 
 
 const MAX_SOURCE_DIM = 2048; // downscale huge camera rolls before processing
 
 type Stage =
   | { kind: "idle" }
-  | { kind: "processing" }
+  | { kind: "processing"; step: PrepStep; ratio: number | null }
   | {
       kind: "preview";
       /** Every result we got, best first — the user picks. */
@@ -119,7 +134,7 @@ export default function CreatePage() {
     e.target.value = ""; // same file can be picked again later
     if (!file) return;
     setError(null);
-    setStage({ kind: "processing" });
+    setStage({ kind: "processing", step: "downloading", ratio: null });
     try {
       const url = URL.createObjectURL(file);
       let img: HTMLImageElement;
@@ -130,6 +145,21 @@ export default function CreatePage() {
           i.onerror = () => rej(new Error("not an image"));
           i.src = url;
         });
+        // Pull the model down ourselves first so the wait has a real
+        // percentage behind it instead of a frozen-looking screen. It is
+        // cached on the device afterwards, so this only ever costs the first
+        // avatar — every one after that skips straight to "finding".
+        if (await isModelCached(SEGMENTER_URL)) {
+          setStage({ kind: "processing", step: "finding", ratio: null });
+        } else {
+          await prefetchModel(SEGMENTER_URL, (p) =>
+            setStage({ kind: "processing", step: "downloading", ratio: p.ratio })
+          ).catch(() => {
+            /* the loader below can still fetch it itself */
+          });
+          setStage({ kind: "processing", step: "finding", ratio: null });
+        }
+
         // An upload is a PHOTOGRAPH, so the model that understands people
         // goes first here — the geometric matte knows edges, not bodies, and
         // routing photos to it first is how a plausible-but-wrong cutout got
@@ -300,12 +330,35 @@ export default function CreatePage() {
           </>
         )}
 
-        {(stage.kind === "processing" || stage.kind === "saving") && (
+        {stage.kind === "saving" && (
           <div className="flex min-h-[40dvh] items-center justify-center">
-            <BlinkingCursor
-              label={stage.kind === "processing" ? "CUTTING YOU OUT" : "SAVING"}
-              className="text-xs"
-            />
+            <BlinkingCursor label="SAVING" className="text-xs" />
+          </div>
+        )}
+
+        {stage.kind === "processing" && (
+          <div className="flex min-h-[40dvh] flex-col items-center justify-center gap-4 px-4">
+            <BlinkingCursor label={STEP_LABEL[stage.step]} className="text-xs" />
+            {/* A determinate bar whenever the server told us the size, so the
+                wait is measurable rather than a spinner that could mean
+                anything. Indeterminate falls back to a slow sweep. */}
+            <div className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-cream/10">
+              <div
+                className={`h-full rounded-full bg-banana transition-[width] duration-200 ${
+                  stage.ratio === null ? "w-1/3 animate-pulse" : ""
+                }`}
+                style={
+                  stage.ratio === null
+                    ? undefined
+                    : { width: `${Math.round(stage.ratio * 100)}%` }
+                }
+              />
+            </div>
+            <p className="max-w-xs text-center text-xs leading-snug text-cream/45">
+              {stage.step === "downloading"
+                ? "One-time download, then it stays on your device — the next avatar starts instantly."
+                : "Everything runs on your device. Nothing is uploaded."}
+            </p>
           </div>
         )}
 

@@ -25,26 +25,42 @@ async function fetchCollection(meta: CollectionMeta): Promise<void> {
   if (meta.fetch.via !== "helius") return;
   process.stdout.write(`• ${meta.name}\n`);
 
-  let address = meta.fetch.collectionAddress;
-  if (!address) {
-    address = await resolveCollectionAddress(meta.fetch.meSymbol);
-    console.log(`  resolved collection ${address}`);
+  // Two enumeration modes. Modern sets are walked by Metaplex collection
+  // grouping; pre-collection sets (assets with no `grouping` at all, e.g. Hot
+  // Heads) can only be walked by verified creator, with a name prefix to keep
+  // that wallet's OTHER series out of the index.
+  const { creatorAddress, namePrefix } = meta.fetch;
+  let address: string | null = null;
+  if (!creatorAddress) {
+    address = meta.fetch.collectionAddress ?? null;
+    if (!address) {
+      address = await resolveCollectionAddress(meta.fetch.meSymbol);
+      console.log(`  resolved collection ${address}`);
+    }
   }
 
   const out: Record<string, { name: string; image: string }> = {};
   let page = 1;
   let skipped = 0;
   for (;;) {
-    const result = await rpc<{ items: DasAsset[] }>("getAssetsByGroup", {
-      groupKey: "collection",
-      groupValue: address,
-      page,
-      limit: 1000,
-    });
+    const result = creatorAddress
+      ? await rpc<{ items: DasAsset[] }>("getAssetsByCreator", {
+          creatorAddress,
+          onlyVerified: true,
+          page,
+          limit: 1000,
+        })
+      : await rpc<{ items: DasAsset[] }>("getAssetsByGroup", {
+          groupKey: "collection",
+          groupValue: address,
+          page,
+          limit: 1000,
+        });
     const items = result.items ?? [];
     if (items.length === 0) break;
     for (const a of items) {
       const name = nameOf(a);
+      if (namePrefix && !name?.startsWith(namePrefix)) continue; // other series
       const num = numberFromName(name);
       const image = imageOf(a, meta.preferCdn);
       if (num === null || !image || !name) {

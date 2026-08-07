@@ -52,7 +52,16 @@ export function imageOf(a: DasAsset, preferCdn = false): string | null {
   // some collections (Sensei) point `links.image` at a 30MB+ GIF that would be
   // downloaded in full on a phone for nothing.
   const image = a.content?.links?.image;
-  if (image && /\.gif(\?|$)/i.test(image)) {
+  // A gif isn't always named .gif: Claynosaurz's links.image is an
+  // extension-less URL that redirects to one. The files[] entry that matches
+  // links.image carries the real mime, so trust that too.
+  const imageMime = files.find(
+    (f) => f.uri === image || f.cdn_uri === image
+  )?.mime;
+  const animated =
+    !!image &&
+    (/\.gif(\?|$)/i.test(image) || (!!imageMime && !STILL_IMAGE.test(imageMime)));
+  if (image && animated) {
     const still = files.find((f) => f.mime && STILL_IMAGE.test(f.mime));
     const uri = preferCdn
       ? (still?.cdn_uri ?? still?.uri)

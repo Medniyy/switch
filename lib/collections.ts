@@ -22,6 +22,14 @@ export type FetchSource =
       /** Optional explicit Metaplex collection mint; auto-resolved from meSymbol
        *  when omitted. */
       collectionAddress?: string;
+      /** Pre-Metaplex-collection sets (no `grouping` on their assets) are
+       *  enumerated by verified creator instead. Mutually exclusive with
+       *  collectionAddress in spirit; when set it wins. */
+      creatorAddress?: string;
+      /** Required alongside creatorAddress: a creator wallet often spans
+       *  several series, so only names starting with this prefix are indexed
+       *  (e.g. "Hot Head #" keeps Katabasis #12 from colliding with token 12). */
+      namePrefix?: string;
     }
   | {
       via: "opensea";
@@ -153,7 +161,62 @@ export const COLLECTIONS: CollectionMeta[] = [
     accent: "#00E7E7",
     // The collection NFT is still the pre-reveal silhouette — use real art.
     coverFromToken: true,
-    fetch: { via: "helius", meSymbol: "solana_in_pajamas" },
+    fetch: {
+      via: "helius",
+      meSymbol: "solana_in_pajamas",
+      // Auto-resolution walks ME listings, and this collection currently has
+      // none — pinned so a re-run can't fail on an empty order book.
+      collectionAddress: "FDtiqzvkM5qhyBMCFQ1gX7qHpPEDKvuX2kwoet3up1t9",
+    },
+  },
+  {
+    id: "the-bullpen",
+    name: "The Bullpen",
+    tag: "Bullpen",
+    chain: "solana",
+    accent: "#9BA83B",
+    fetch: {
+      via: "helius",
+      meSymbol: "the_bullpen",
+      // ME's v2 listings endpoint returns [] for this collection (pool-style
+      // listings only), which breaks the auto-resolution path — pinned from a
+      // real token's DAS grouping instead.
+      collectionAddress: "C5gHBKXwA8jduXNk3HyAVLnLBN6PEM8fTqkNNh5uyyjJ",
+    },
+  },
+  {
+    id: "claynosaurz",
+    name: "Claynosaurz",
+    tag: "Claynosaurz",
+    chain: "solana",
+    accent: "#4FC3E8",
+    // links.image is an extension-less GIF; the indexer prefers the static
+    // `avatars/…` PNG file DAS lists alongside it — a clean flat-backdrop
+    // headshot render, which is also the better art to wear.
+    fetch: { via: "helius", meSymbol: "claynosaurz" },
+  },
+  {
+    id: "hot-heads",
+    name: "Hot Heads",
+    tag: "Hot Heads",
+    chain: "solana",
+    accent: "#FF5A1F",
+    // 1/1 pixel-art SCENES — skies, mountains, rooms — never a flat backdrop,
+    // so no colour key can isolate the character. Seed the editor untouched.
+    autoCutout: false,
+    // No collection grouping (see fetch below) means no collection NFT to
+    // read a cover from either — use the first token's art.
+    coverFromToken: true,
+    // Pre-Metaplex-collection mint: assets carry NO collection grouping, so
+    // they can only be enumerated by verified creator. That wallet also minted
+    // Katabasis, Gates of Hell and a pile of 1/1 collabs — the name prefix is
+    // what keeps them out. The real set is Hot Head #1–#78.
+    fetch: {
+      via: "helius",
+      meSymbol: "hot_heads",
+      creatorAddress: "CywHUY59AFi7nmGf9kVfNgd39TD9rnkyx6GfWsn5iNnE",
+      namePrefix: "Hot Head #",
+    },
   },
 
   // ---- Ethereum ----

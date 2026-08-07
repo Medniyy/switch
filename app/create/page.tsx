@@ -99,7 +99,9 @@ export default function CreatePage() {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    // Async on purpose: state lands after the IndexedDB read resolves.
+    const t = window.setTimeout(() => void refresh(), 0);
+    return () => window.clearTimeout(t);
   }, [refresh]);
   // Revoke all thumbnails on unmount (ref'd via state snapshot).
   useEffect(() => {
@@ -329,25 +331,27 @@ function PreviewStage({
   onRetry: () => void;
 }) {
   const [useCutout, setUseCutout] = useState(cutout !== null);
-  const holderRef = useRef<HTMLDivElement | null>(null);
+  const viewRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Show the actual canvas (checkerboard behind it so the cutout reads).
+  // Blit the chosen result into the on-page canvas (checkerboard behind it
+  // so the cutout reads). The sources are drawn from, never modified.
   useEffect(() => {
-    const holder = holderRef.current;
-    if (!holder) return;
-    holder.innerHTML = "";
-    const c = useCutout && cutout ? cutout : original;
-    c.style.width = "100%";
-    c.style.height = "100%";
-    holder.appendChild(c);
+    const view = viewRef.current;
+    if (!view) return;
+    const src = useCutout && cutout ? cutout : original;
+    view.width = src.width;
+    view.height = src.height;
+    const ctx = view.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, view.width, view.height);
+    ctx.drawImage(src, 0, 0);
   }, [useCutout, cutout, original]);
 
   return (
     <div className="mt-6 flex flex-col gap-4">
-      <div
-        ref={holderRef}
-        className="aspect-square w-full overflow-hidden rounded-[var(--radius-card)] pixel-border bg-[conic-gradient(#22252b_0_25%,#181b20_0_50%,#22252b_0_75%,#181b20_0)] bg-[length:24px_24px]"
-      />
+      <div className="aspect-square w-full overflow-hidden rounded-[var(--radius-card)] pixel-border bg-[conic-gradient(#22252b_0_25%,#181b20_0_50%,#22252b_0_75%,#181b20_0)] bg-[length:24px_24px]">
+        <canvas ref={viewRef} className="h-full w-full" />
+      </div>
       {cutout === null && (
         <p className="text-center text-sm text-cream/55">
           No person found in this photo, so it stays as-is — you can still

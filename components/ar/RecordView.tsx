@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Banana,
+  Cake,
   CameraOff,
   Edit3,
   ImagePlus,
@@ -89,6 +90,8 @@ export function RecordView() {
   const cameraMirror = useAppStore((s) => s.cameraMirror);
   const bananaRain = useAppStore((s) => s.bananaRain);
   const setBananaRain = useAppStore((s) => s.setBananaRain);
+  const birthdayCake = useAppStore((s) => s.birthdayCake);
+  const setBirthdayCake = useAppStore((s) => s.setBirthdayCake);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -572,10 +575,10 @@ export function RecordView() {
               <button
                 onClick={() => setFiltersOpen(true)}
                 aria-label="Filters"
-                aria-pressed={bananaRain}
+                aria-pressed={bananaRain || birthdayCake}
                 title="Filters"
                 className={`relative w-11 h-11 rounded-full border-[2px] flex items-center justify-center backdrop-blur-sm transition-colors active:scale-95 ${
-                  bananaRain
+                  bananaRain || birthdayCake
                     ? "bg-banana text-screen border-banana"
                     : "bg-screen/55 text-cream border-cream/40"
                 }`}
@@ -889,6 +892,42 @@ export function RecordView() {
                   <span
                     className={`absolute top-0.5 h-5 w-5 rounded-full bg-screen transition-transform ${
                       bananaRain ? "translate-x-[22px]" : "translate-x-0.5"
+                    }`}
+                  />
+                </span>
+              </button>
+              <button
+                onClick={() => setBirthdayCake(!birthdayCake)}
+                aria-pressed={birthdayCake}
+                className={`mt-3 flex w-full items-center gap-3 rounded-2xl border-[2px] p-4 text-left transition-colors ${
+                  birthdayCake
+                    ? "border-banana bg-banana/10"
+                    : "border-cream/25 bg-white/5"
+                }`}
+              >
+                <span
+                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${
+                    birthdayCake ? "bg-banana text-screen" : "bg-cream/10 text-banana"
+                  }`}
+                >
+                  <Cake size={22} strokeWidth={2.5} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block font-[family-name:var(--font-display)] text-[11px] text-cream">
+                    Blow Out The Candles
+                  </span>
+                  <span className="block text-sm text-cream/55">
+                    SMB turns 5 — open wide to blow the cake out on camera.
+                  </span>
+                </span>
+                <span
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                    birthdayCake ? "bg-banana" : "bg-cream/25"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-screen transition-transform ${
+                      birthdayCake ? "translate-x-[22px]" : "translate-x-0.5"
                     }`}
                   />
                 </span>

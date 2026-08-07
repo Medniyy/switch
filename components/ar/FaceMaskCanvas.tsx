@@ -15,6 +15,7 @@ import {
 } from "@/lib/imageUtils";
 import type { MaskFit } from "@/lib/userMasks";
 import { BananaField } from "@/lib/bananaRain";
+import { CakeGame } from "@/lib/birthdayCake";
 import {
   computeIdleMotion,
   computeMouthSlices,
@@ -114,6 +115,7 @@ export function FaceMaskCanvas({
   const cameraMirror = useAppStore((s) => s.cameraMirror);
   const debugTracking = useAppStore((s) => s.debugTracking);
   const bananaRain = useAppStore((s) => s.bananaRain);
+  const birthdayCake = useAppStore((s) => s.birthdayCake);
   const maskRef = useRef(mask);
   const qualityRef = useRef(videoQuality);
   const cameraMirrorRef = useRef(cameraMirror);
@@ -122,6 +124,8 @@ export function FaceMaskCanvas({
   const debugRef = useRef(debugTracking);
   const bananaRainRef = useRef(bananaRain);
   const bananaFieldRef = useRef<BananaField | null>(null);
+  const birthdayCakeRef = useRef(birthdayCake);
+  const cakeGameRef = useRef<CakeGame | null>(null);
   const lastFrameRef = useRef(0);
   const nftRef = useRef(nftImage);
   const placementRef = useRef(placement);
@@ -148,6 +152,11 @@ export function FaceMaskCanvas({
     // Re-seed a full-height scatter each time the effect is switched on.
     if (bananaRain) bananaFieldRef.current?.reset();
   }, [bananaRain]);
+  useEffect(() => {
+    birthdayCakeRef.current = birthdayCake;
+    // Fresh cake (slide-in, all candles lit) on every enable.
+    if (birthdayCake) cakeGameRef.current?.reset();
+  }, [birthdayCake]);
   useEffect(() => { nftRef.current = nftImage; }, [nftImage]);
   useEffect(() => { placementRef.current = placement; }, [placement]);
   useEffect(() => { anchorsRef.current = faceAnchors; }, [faceAnchors]);
@@ -171,6 +180,7 @@ export function FaceMaskCanvas({
       computeMouthSlices,
       lidClose,
       sanitizeFaceAnchors,
+      CakeGame,
     };
   }, []);
 
@@ -271,6 +281,15 @@ export function FaceMaskCanvas({
         const dt = lastFrameRef.current ? now - lastFrameRef.current : 16;
         bananaFieldRef.current.update(dt, w, h);
         bananaFieldRef.current.draw(ctx);
+      }
+      // Birthday cake game (MonkeyDAO, SMB's 5th): same layer rules as the
+      // bananas — over the camera, under the avatar, inside the recording.
+      // The wearer's live jawOpen is the game input (blowing the candles).
+      if (birthdayCakeRef.current) {
+        if (!cakeGameRef.current) cakeGameRef.current = new CakeGame();
+        const dt = lastFrameRef.current ? now - lastFrameRef.current : 16;
+        cakeGameRef.current.update(dt, w, h, expression.jawOpen);
+        cakeGameRef.current.draw(ctx);
       }
       lastFrameRef.current = now;
 

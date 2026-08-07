@@ -287,11 +287,25 @@ export function FaceMaskCanvas({
       // Birthday cake game (MonkeyDAO, SMB's 5th): same layer rules as the
       // bananas — over the camera, under the avatar, inside the recording.
       // The wearer's live jawOpen is the game input (blowing the candles).
+      //
+      // ⚠️ Drawn with the camera mirror UNDONE (applying the same flip twice
+      // is the identity). The cake carries a numeral "5", and inside the
+      // mirrored context that renders backwards — in the preview and in the
+      // exported clip. The bananas never exposed this because they're
+      // symmetric; anything with text or a digit must cancel the mirror.
+      // Done here rather than after ctx.restore() so the cake keeps its
+      // z-order: over the camera frame, under the avatar.
       if (birthdayCakeRef.current) {
         if (!cakeGameRef.current) cakeGameRef.current = new CakeGame();
         const dt = lastFrameRef.current ? now - lastFrameRef.current : 16;
         cakeGameRef.current.update(dt, w, h, expression.jawOpen);
+        ctx.save();
+        if (cameraMirror) {
+          ctx.translate(w, 0);
+          ctx.scale(-1, 1);
+        }
         cakeGameRef.current.draw(ctx);
+        ctx.restore();
       }
       lastFrameRef.current = now;
 

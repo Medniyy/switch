@@ -18,7 +18,6 @@ import {
   useState,
   type ChangeEvent,
 } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ImagePlus, Trash2, ShieldCheck } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
@@ -34,7 +33,6 @@ import {
   USER_MASK_VERSION,
   type SavedUserMask,
 } from "@/lib/userMasks";
-import { BrandWordmark } from "@/components/ui/BrandLogo";
 import { PixelButton } from "@/components/ui/PixelButton";
 import { BlinkingCursor } from "@/components/ui/BlinkingCursor";
 
@@ -215,13 +213,9 @@ export default function CreatePage() {
   );
 
   return (
-    <main className="min-h-dvh flex flex-col">
-      <header className="flex items-center justify-between px-4 md:px-8 pt-[max(1rem,env(safe-area-inset-top))] pb-2">
-        <Link href="/" aria-label="Back to home" className="rounded-lg transition-opacity hover:opacity-80 active:scale-[0.98]">
-          <BrandWordmark />
-        </Link>
-      </header>
-
+    // No wordmark/header of its own: this route renders inside AppShell, which
+    // already supplies the desktop sidebar and the mobile tab bar.
+    <div className="flex flex-1 flex-col">
       <div className="mx-auto w-full max-w-xl flex-1 px-6 pb-[max(2rem,env(safe-area-inset-bottom))]">
         <h1 className="pt-4 text-center font-[family-name:var(--font-display)] font-semibold text-3xl tracking-tight">
           Your own <span className="text-banana">avatar</span>
@@ -315,7 +309,7 @@ export default function CreatePage() {
           />
         )}
       </div>
-    </main>
+    </div>
   );
 }
 

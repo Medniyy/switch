@@ -356,8 +356,8 @@ export default function CreatePage() {
             </div>
             <p className="max-w-xs text-center text-xs leading-snug text-cream/45">
               {stage.step === "downloading"
-                ? "One-time download, then it stays on your device — the next avatar starts instantly."
-                : "Everything runs on your device. Nothing is uploaded."}
+                ? "First-time model download. Cached on this device, so future avatars should start faster."
+                : "Everything runs on your device. Your photo is never uploaded."}
             </p>
           </div>
         )}

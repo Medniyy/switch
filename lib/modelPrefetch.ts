@@ -10,15 +10,17 @@
  *     and because it lands in the HTTP/Cache-Storage cache the loader that
  *     runs afterwards gets it instantly instead of downloading twice.
  *
- *  2. It should only ever be slow ONCE. Cache Storage survives reloads and
- *     tab closes, so the second avatar a person makes — and every one after
- *     that, on any day — skips the download entirely. That is what makes
- *     showing a progress bar honest: it is a real one-time cost, not a
- *     spinner we invented to look busy.
+ *  2. It should USUALLY only be slow once. Cache Storage survives reloads
+ *     and closed tabs, so a later avatar normally skips the download. Note
+ *     the word "usually": the cache can be cleared by the user or evicted
+ *     under storage pressure, so never promise the model is permanently on
+ *     the device — the UI says "cached on this device, future uses should
+ *     start faster", which is what we can actually guarantee.
  *
  * Falls back gracefully everywhere: no Cache Storage (private mode, old
  * browsers) still works, just without persistence, and a failed prefetch is
- * not fatal because the model loader can always fetch the URL itself.
+ * not fatal because the model loader can always fetch the URL itself. An
+ * evicted entry simply means one more download, never a broken flow.
  */
 
 const CACHE_NAME = "switch-models-v1";

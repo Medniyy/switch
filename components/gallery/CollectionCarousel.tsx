@@ -17,10 +17,13 @@ import { CollectionCard } from "./CollectionCard";
 export function CollectionCarousel({
   collections,
   autoplay = false,
+  trailing,
 }: {
   collections: CollectionMeta[];
   /** Slowly auto-advance (used on the welcome screen). Still fully draggable. */
   autoplay?: boolean;
+  /** One extra slide after the collections (the "create your own" card). */
+  trailing?: React.ReactNode;
 }) {
   const plugins = useMemo(() => {
     const list = [WheelGesturesPlugin({ forceWheelAxis: "y" })];
@@ -124,6 +127,19 @@ export function CollectionCarousel({
             </div>
           );
         })}
+        {trailing && (
+          <div className="flex h-full shrink-0 items-center justify-center px-2 md:px-3">
+            <div
+              style={{
+                transform: `scale(${0.86 + (tween[collections.length] ?? 0) * 0.14})`,
+                opacity: 0.5 + (tween[collections.length] ?? 0) * 0.5,
+              }}
+              className="w-[min(78cqw,calc(100cqh_-_3.25rem))] sm:w-[min(42cqw,calc(100cqh_-_3.25rem))] lg:w-[min(29cqw,calc(100cqh_-_3.25rem))]"
+            >
+              {trailing}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

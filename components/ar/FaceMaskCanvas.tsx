@@ -27,6 +27,7 @@ import {
   type LiveExpression,
 } from "@/lib/headAnimation";
 import { sanitizeFaceAnchors, type FaceAnchors } from "@/lib/faceAnchors";
+import { photoCutout } from "@/lib/aiCutout";
 import { useAppStore, VIDEO_QUALITY } from "@/store/useAppStore";
 
 /** The mask draw of the most recent live frame, in CANVAS pixel space (pre-
@@ -181,6 +182,7 @@ export function FaceMaskCanvas({
       lidClose,
       sanitizeFaceAnchors,
       CakeGame,
+      photoCutout,
     };
   }, []);
 

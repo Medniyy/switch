@@ -20,6 +20,13 @@ const MODEL_PATH = join(OUT_DIR, "face_landmarker.task");
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 
+// Selfie segmenter (250KB) — powers the "create your own avatar" photo
+// cutout (lib/aiCutout.ts). Fetched lazily by the browser only when that
+// flow is used; vendored here so runtime stays CDN-free like everything else.
+const SELFIE_PATH = join(OUT_DIR, "selfie_segmenter.tflite");
+const SELFIE_URL =
+  "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/selfie_segmenter.tflite";
+
 async function exists(p) {
   try {
     await access(p);
@@ -82,17 +89,22 @@ async function main() {
     console.warn("WASM source not found (is @mediapipe/tasks-vision installed?)");
   }
 
-  // 2. Download model (skip if already present)
-  if (await exists(MODEL_PATH)) {
-    console.log("Model already present, skipping download.");
-    return;
+  // 2. Download models (skip any already present)
+  for (const { path, url, label } of [
+    { path: MODEL_PATH, url: MODEL_URL, label: "Face Landmarker" },
+    { path: SELFIE_PATH, url: SELFIE_URL, label: "Selfie Segmenter" },
+  ]) {
+    if (await exists(path)) {
+      console.log(`${label} model already present, skipping download.`);
+      continue;
+    }
+    console.log(`Downloading ${label} model...`);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`${label} download failed: HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    await writeFile(path, buf);
+    console.log(`Saved ${label} (${(buf.length / 1e6).toFixed(1)} MB) -> ${path}`);
   }
-  console.log("Downloading Face Landmarker model...");
-  const res = await fetch(MODEL_URL);
-  if (!res.ok) throw new Error(`Model download failed: HTTP ${res.status}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  await writeFile(MODEL_PATH, buf);
-  console.log(`Saved model (${(buf.length / 1e6).toFixed(1)} MB) -> public/mediapipe/face_landmarker.task`);
 }
 
 main().catch((err) => {

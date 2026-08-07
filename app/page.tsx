@@ -8,6 +8,7 @@ import { getLastMaskKey } from "@/lib/userMasks";
 import { useLockBodyScroll } from "@/lib/useLockBodyScroll";
 import { BrandWordmark } from "@/components/ui/BrandLogo";
 import { CollectionCarousel } from "@/components/gallery/CollectionCarousel";
+import { CreateAvatarCard } from "@/components/gallery/CreateAvatarCard";
 import { WelcomeScreen } from "@/components/gallery/WelcomeScreen";
 import { StoryTutorial } from "@/components/onboarding/StoryTutorial";
 
@@ -93,7 +94,10 @@ export default function Home() {
 
       {/* Centered, scrollable collection carousel — the hero content */}
       <div className="flex-1 flex flex-col justify-center py-4 md:py-6 min-h-0">
-        <CollectionCarousel collections={VISIBLE_COLLECTIONS} />
+        <CollectionCarousel
+          collections={VISIBLE_COLLECTIONS}
+          trailing={<CreateAvatarCard index={VISIBLE_COLLECTIONS.length} />}
+        />
       </div>
 
       {/* The "community tool / trademarks" disclaimer used to sit here as a

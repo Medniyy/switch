@@ -162,6 +162,22 @@ export async function saveUserMask(record: SavedUserMask): Promise<void> {
   markOnboardingCompleted(record.key);
 }
 
+/**
+ * Every saved mask whose key starts with `prefix` (all of them when omitted),
+ * migrated, newest first. Used by the "create your own avatar" page to show
+ * the avatars already on this device.
+ */
+export async function listSavedMasks(prefix = ""): Promise<SavedUserMask[]> {
+  const all = (await withStore<SavedUserMask[]>("readonly", (store) =>
+    store.getAll()
+  )) ?? [];
+  return all
+    .filter((r) => r.key.startsWith(prefix))
+    .map((r) => migrateRecord(r))
+    .filter((r): r is SavedUserMask => r !== null)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
 export async function deleteSavedMask(key: string): Promise<void> {
   await withStore("readwrite", (store) => {
     store.delete(key);

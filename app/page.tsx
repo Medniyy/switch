@@ -11,6 +11,10 @@ import { CollectionCarousel } from "@/components/gallery/CollectionCarousel";
 import { CreateAvatarCard } from "@/components/gallery/CreateAvatarCard";
 import { WelcomeScreen } from "@/components/gallery/WelcomeScreen";
 import { StoryTutorial } from "@/components/onboarding/StoryTutorial";
+import {
+  rememberCollectionsOpen,
+  shouldOpenCollections,
+} from "@/lib/appNavigation";
 
 const ONBOARDED_KEY = "switch:onboarded";
 
@@ -34,10 +38,15 @@ export default function Home() {
 
   useEffect(() => {
     setHasResume(!!getLastMaskKey());
+    if (shouldOpenCollections()) {
+      setEntered(true);
+      rememberCollectionsOpen(true);
+    }
   }, []);
 
   const enter = () => {
     setEntered(true);
+    rememberCollectionsOpen(true);
     try {
       if (!window.localStorage.getItem(ONBOARDED_KEY)) setShowTutorial(true);
     } catch {
@@ -61,7 +70,11 @@ export default function Home() {
       {/* Top bar: wordmark doubles as a "back to home" control */}
       <header className="flex items-center justify-between px-4 md:px-8 pt-[max(1rem,env(safe-area-inset-top))] pb-2">
         <button
-          onClick={() => setEntered(false)}
+          onClick={() => {
+            rememberCollectionsOpen(false);
+            setEntered(false);
+            router.replace("/");
+          }}
           aria-label="Back to home"
           className="rounded-lg transition-opacity hover:opacity-80 active:scale-[0.98]"
         >

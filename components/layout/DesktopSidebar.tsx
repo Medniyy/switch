@@ -4,9 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutGrid, Camera } from "lucide-react";
 import { BrandWordmark } from "@/components/ui/BrandLogo";
+import { COLLECTIONS_HREF, rememberCollectionsOpen } from "@/lib/appNavigation";
 
 const NAV = [
-  { href: "/", label: "COLLECTIONS", icon: LayoutGrid, exact: true },
+  { href: COLLECTIONS_HREF, label: "COLLECTIONS", icon: LayoutGrid, exact: true },
   { href: "/record", label: "CAMERA", icon: Camera, exact: false },
 ];
 
@@ -23,11 +24,17 @@ export function DesktopSidebar() {
       {/* Nav */}
       <nav className="flex flex-col gap-1.5">
         {NAV.map(({ href, label, icon: Icon, exact }) => {
-          const active = exact ? pathname === href : pathname.startsWith(href);
+          const routePath = href.split("?")[0];
+          const active = exact
+            ? pathname === routePath
+            : pathname.startsWith(routePath);
           return (
             <Link
               key={href}
               href={href}
+              onClick={() => {
+                if (label === "COLLECTIONS") rememberCollectionsOpen(true);
+              }}
               className={`flex items-center gap-3 px-3 py-3 rounded-2xl transition-colors font-[family-name:var(--font-display)] text-sm ${
                 active
                   ? "text-screen bg-banana"

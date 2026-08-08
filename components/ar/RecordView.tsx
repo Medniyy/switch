@@ -63,6 +63,11 @@ import {
 } from "@/lib/userMasks";
 import { useLockBodyScroll } from "@/lib/useLockBodyScroll";
 import type { NFT } from "@/lib/types";
+import {
+  avatarPickerHref,
+  COLLECTIONS_HREF,
+  rememberCollectionsOpen,
+} from "@/lib/appNavigation";
 
 interface RuntimeMask {
   record: SavedUserMask;
@@ -341,10 +346,14 @@ export function RecordView() {
     setPhotoResult(null);
     setCaptured(null);
     setCapturedPlacement(null);
-    router.push("/");
+    rememberCollectionsOpen(true);
+    router.push(COLLECTIONS_HREF);
   }, [photoResult, router]);
 
   const chooseAnotherPfp = useCallback(() => {
+    const destination = selectedNFT
+      ? avatarPickerHref(selectedNFT.collection)
+      : COLLECTIONS_HREF;
     setSelectedNFT(null);
     setRuntimeMask(null);
     setEditingMask(false);
@@ -352,8 +361,8 @@ export function RecordView() {
     if (photoResult) URL.revokeObjectURL(photoResult.url);
     setPhotoResult(null);
     setCaptured(null);
-    router.push("/");
-  }, [photoResult, reset, router, setSelectedNFT]);
+    router.push(destination);
+  }, [photoResult, reset, router, selectedNFT, setSelectedNFT]);
 
   const completeMaskPrep = useCallback((mask: RuntimeMask) => {
     setRuntimeMask(mask);
@@ -415,7 +424,7 @@ export function RecordView() {
         <p className="font-[family-name:var(--font-display)] text-cream text-sm leading-relaxed">
           NOTHING TO WEAR YET
         </p>
-        <Link href="/">
+        <Link href={COLLECTIONS_HREF} onClick={() => rememberCollectionsOpen(true)}>
           <PixelButton size="lg" className="flex items-center gap-2">
             <Search size={16} strokeWidth={3} />
             CHOOSE A COLLECTION
@@ -541,13 +550,14 @@ export function RecordView() {
         {/* Top bar: back, PFP name, gear */}
         {!inEditor && (
           <div className="absolute top-0 inset-x-0 z-30 flex items-start justify-between p-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
-            <Link
-              href="/"
+            <button
+              type="button"
+              onClick={chooseAnotherPfp}
               className="p-2 rounded-full bg-screen/55 border-[2px] border-cream/40 text-cream backdrop-blur-sm"
               aria-label="Back"
             >
               <ArrowLeft size={18} strokeWidth={3} />
-            </Link>
+            </button>
             <div className="flex items-center gap-2">
               <span className="px-2 py-1 rounded bg-screen/55 border-[2px] border-banana/70 backdrop-blur-sm font-[family-name:var(--font-display)] text-banana text-[9px]">
                 {selectedNFT.name}

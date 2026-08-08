@@ -239,10 +239,42 @@ test("the WebKit raw-mic path still records audio", async ({ page }) => {
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
       configurable: true,
     });
+
+    // Capture the actual constraints handed to WebKit and expose its modern
+    // AudioSession hook. This guards both halves of the low-volume fix: Safari
+    // must not attenuate the raw input through AGC, and preview playback must
+    // leave the quiet play-and-record route after the mic closes.
+    Object.defineProperty(navigator, "audioSession", {
+      value: { type: "auto" },
+      configurable: true,
+    });
+    const realGetUserMedia = navigator.mediaDevices.getUserMedia.bind(
+      navigator.mediaDevices
+    );
+    navigator.mediaDevices.getUserMedia = async (constraints) => {
+      if (constraints.audio) {
+        (
+          window as unknown as {
+            __lastAudioConstraints?: MediaTrackConstraints | boolean;
+          }
+        ).__lastAudioConstraints = constraints.audio;
+      }
+      return realGetUserMedia(constraints);
+    };
   });
 
   await liveVideoStage(page);
   await setScript(page, SCRIPT);
+
+  const captureConstraints = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __lastAudioConstraints?: MediaTrackConstraints;
+        }
+      ).__lastAudioConstraints
+  );
+  expect(captureConstraints?.autoGainControl).toBe(false);
 
   const { bytes, b64 } = await recordAndRead(page, 4);
   expect(summarizeMp4(new Uint8Array(bytes)).audio).not.toBeNull();
@@ -250,6 +282,16 @@ test("the WebKit raw-mic path still records audio", async ({ page }) => {
   const peak = await audioPeak(page, b64);
   expect(typeof peak, `audioPeak said: ${peak}`).toBe("number");
   expect(peak as number, "clip must not be silent").toBeGreaterThan(0.01);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            navigator as Navigator & { audioSession?: { type: string } }
+          ).audioSession?.type
+      )
+    )
+    .toBe("playback");
 });
 
 test("a clip that came back silent says so instead of pretending", async ({

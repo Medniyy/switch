@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ImagePlus } from "lucide-react";
 import { DEFAULT_ACCENT } from "@/lib/collections";
+import { rememberCollectionsOpen } from "@/lib/appNavigation";
 
 /**
  * The "create your own avatar" tile — one more card in the gallery, after the
@@ -13,6 +14,7 @@ export function CreateAvatarCard({ index = 0 }: { index?: number }) {
   return (
     <Link
       href="/create"
+      onClick={() => rememberCollectionsOpen(true)}
       className="roll-out group flex flex-col gap-3.5 w-full"
       style={{ animationDelay: `${Math.min(index, 12) * 55}ms` }}
     >

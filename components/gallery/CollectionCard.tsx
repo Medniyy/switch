@@ -6,6 +6,7 @@ import { Crown } from "lucide-react";
 import type { CollectionMeta } from "@/lib/collections";
 import { coverSrc, DEFAULT_ACCENT } from "@/lib/collections";
 import { useStats } from "@/components/stats/useStats";
+import { rememberCollectionsOpen } from "@/lib/appNavigation";
 
 /** One interactive collection tile in the "Choose your wear" gallery. */
 export function CollectionCard({
@@ -27,6 +28,7 @@ export function CollectionCard({
   return (
     <Link
       href={`/c/${collection.id}`}
+      onClick={() => rememberCollectionsOpen(true)}
       className="roll-out group flex flex-col gap-3.5 w-full"
       style={{ animationDelay: `${Math.min(index, 12) * 55}ms` }}
     >

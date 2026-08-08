@@ -8,7 +8,10 @@ import {
   type RefObject,
 } from "react";
 import { useAppStore } from "@/store/useAppStore";
-import { AUDIO_CONSTRAINTS } from "@/lib/audio";
+import {
+  captureAudioConstraints,
+  restorePlaybackAudioSession,
+} from "@/lib/audio";
 
 export type CameraStatus =
   | "idle"
@@ -82,6 +85,7 @@ export function useCameraStream(
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
       audioTrackRef.current = null;
+      restorePlaybackAudioSession();
       setStatus("idle");
       return;
     }
@@ -118,7 +122,10 @@ export function useCameraStream(
     // whole point of the iOS fix). On rejection we can't tell which device was
     // blocked, so retry video-only: if THAT succeeds, only the mic was denied.
     navigator.mediaDevices
-      .getUserMedia({ video: videoConstraints, audio: AUDIO_CONSTRAINTS })
+      .getUserMedia({
+        video: videoConstraints,
+        audio: captureAudioConstraints(),
+      })
       .then((stream) => {
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
@@ -155,6 +162,7 @@ export function useCameraStream(
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
       audioTrackRef.current = null;
+      restorePlaybackAudioSession();
     };
     // audioTrackRef is a stable ref from the caller.
     // eslint-disable-next-line react-hooks/exhaustive-deps

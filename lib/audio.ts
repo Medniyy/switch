@@ -24,6 +24,31 @@ export const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
 };
 
 /**
+ * WebKit's capture processing can attenuate an otherwise healthy microphone
+ * even when AGC reports as enabled. On iPhone/iPad we keep the known-good raw
+ * path completely unprocessed; other browsers retain AGC because Android needs
+ * it before our recorder-side make-up gain.
+ */
+export function captureAudioConstraints(): MediaTrackConstraints {
+  return webAudioTrackIsUnreliable()
+    ? { ...AUDIO_CONSTRAINTS, autoGainControl: false }
+    : AUDIO_CONSTRAINTS;
+}
+
+/** Return iOS playback to the speaker-oriented session after releasing the mic. */
+export function restorePlaybackAudioSession(): void {
+  if (typeof navigator === "undefined") return;
+  try {
+    const audioSession = (
+      navigator as Navigator & { audioSession?: { type: string } }
+    ).audioSession;
+    if (audioSession) audioSession.type = "playback";
+  } catch {
+    /* Older Safari versions do not expose AudioSession. */
+  }
+}
+
+/**
  * Whether a WebAudio-derived MediaStreamTrack can be trusted to carry signal
  * into MediaRecorder on this browser.
  *

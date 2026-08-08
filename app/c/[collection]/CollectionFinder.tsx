@@ -15,6 +15,10 @@ import { NumberPad } from "@/components/search/NumberPad";
 import { NFTPreviewCard } from "@/components/search/NFTPreviewCard";
 import { NFTGrid } from "@/components/gallery/NFTGrid";
 import { BlinkingCursor } from "@/components/ui/BlinkingCursor";
+import {
+  COLLECTIONS_HREF,
+  rememberCollectionsOpen,
+} from "@/lib/appNavigation";
 
 type Status = "idle" | "loading" | "found" | "notfound";
 
@@ -115,7 +119,8 @@ export function CollectionFinder() {
           [ UNKNOWN COLLECTION ]
         </p>
         <Link
-          href="/"
+          href={COLLECTIONS_HREF}
+          onClick={() => rememberCollectionsOpen(true)}
           className="font-[family-name:var(--font-display)] text-banana text-xs hover:underline"
         >
           ← BACK TO COLLECTIONS
@@ -128,7 +133,8 @@ export function CollectionFinder() {
     <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 md:px-8 py-3 md:py-12 landscape:py-2">
       <header className="flex shrink-0 flex-col gap-2 md:gap-3">
         <Link
-          href="/"
+          href={COLLECTIONS_HREF}
+          onClick={() => rememberCollectionsOpen(true)}
           className="inline-flex items-center gap-2 text-cream/50 hover:text-banana transition-colors font-[family-name:var(--font-display)] text-[10px] w-fit"
         >
           <ArrowLeft size={12} strokeWidth={3} />

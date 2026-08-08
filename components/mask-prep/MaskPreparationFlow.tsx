@@ -467,8 +467,13 @@ function useStartingMask(
     setAutoStatus("processing");
     const frame = window.requestAnimationFrame(async () => {
       try {
+        // Prefer the subject-aware engine for the first result. The geometric
+        // matte is fast, but on dark or detailed art it can walk through the
+        // character itself (Sensei hats/faces are a concrete example). The
+        // segmenter preserves the subject and prepareArtwork still falls back
+        // to the matte when the model cannot find one.
         const prepared = await prepareArtwork(rawImage, {
-          allowSegmenter: false,
+          preferSegmenter: true,
         });
         const canvas = prepared.via === "original" ? null : prepared.canvas;
         const img = canvas
@@ -769,8 +774,6 @@ function MaskPrepEditor({
   // Manual background removal (see removeBackgroundNow).
   const [cutting, setCutting] = useState(false);
   const [cutMessage, setCutMessage] = useState<string | null>(null);
-  /** Alternates which engine removeBackgroundNow tries (see there). */
-  const cutAttemptRef = useRef(0);
   const [cursor, setCursor] = useState<Point | null>(null);
   const [hintVisible, setHintVisible] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1025,7 +1028,7 @@ function MaskPrepEditor({
    * make every one of them un-restorable.
    */
   /**
-   * Run background removal on whatever is on the canvas right now.
+   * Run smart background removal from the untouched artwork.
    *
    * Preparation already does this automatically, so most people never need
    * the button — but "automatic" has to be recoverable when it declines (busy
@@ -1043,21 +1046,28 @@ function MaskPrepEditor({
 
     setCutting(true);
     try {
-      // Feed it a copy: prepareArtwork reads pixels and must not race the
-      // live editing canvas.
-      const snapshot = document.createElement("canvas");
-      snapshot.width = editCanvas.width;
-      snapshot.height = editCanvas.height;
-      snapshot.getContext("2d")?.drawImage(editCanvas, 0, 0);
+      // Always start from the full artwork when it is available. Processing
+      // the already-cut canvas compounds alpha on every press and can only
+      // erase more of the subject; it can never recover pixels a prior pass
+      // removed. The current canvas remains a fallback for legacy masks whose
+      // source artwork is unavailable.
+      const source = artworkImage
+        ? makeSquareCanvas(artworkImage, editCanvas.width)
+        : (() => {
+            const snapshot = document.createElement("canvas");
+            snapshot.width = editCanvas.width;
+            snapshot.height = editCanvas.height;
+            snapshot.getContext("2d")?.drawImage(editCanvas, 0, 0);
+            return snapshot;
+          })();
 
-      // Alternate between the engines on repeat presses. Neither can tell
-      // when it got the subject wrong, so the button doubles as "try the
-      // other way" rather than recomputing the same disappointing answer.
-      const prepared = await prepareArtwork(snapshot, {
+      // This is deliberately deterministic. The portrait segmenter produces
+      // the intact Sensei-style cutout; prepareArtwork falls back to the matte
+      // only when the segmenter fails or returns implausible coverage.
+      const prepared = await prepareArtwork(source, {
         crop: false,
-        preferSegmenter: cutAttemptRef.current % 2 === 1,
+        preferSegmenter: true,
       });
-      cutAttemptRef.current += 1;
       if (prepared.via === "original") {
         setCutMessage(
           "Couldn't find a subject to separate here — erase the background with the brush instead."
@@ -1066,8 +1076,8 @@ function MaskPrepEditor({
       }
       setCutMessage(
         prepared.suspicious
-          ? "That looks off — press Remove background again to try the other method, or Undo."
-          : "Press again to try the other method if this isn't right."
+          ? "The subject was difficult to separate. Use Undo if this isn't right."
+          : "Smart background removal applied."
       );
 
       const out = document.createElement("canvas");

@@ -78,6 +78,10 @@ test("live loop draws per frame but never allocates/segments/re-encodes", async 
   // Keep full character → land on the live stage with a prepared mask loaded.
   await page.getByRole("button", { name: /keep it whole/i }).click();
   await expect(page.getByText(NFT.name)).toBeVisible({ timeout: 20_000 });
+  // The name appears before RecordView's two persistent canvases necessarily
+  // commit. Wait for that one-time mount so the measurement covers the live
+  // render loop itself, not React finishing the route transition.
+  await expect(page.locator("canvas")).toHaveCount(2, { timeout: 20_000 });
 
   // Wait until the render loop is provably spinning. We key off rAF (not
   // drawImage) so this is independent of the headless fake camera actually

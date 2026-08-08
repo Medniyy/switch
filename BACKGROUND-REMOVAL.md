@@ -5,8 +5,8 @@ a high-quality client-side solution", "don't patch collection by collection").
 
 ## What it is now
 
-Nothing is uploaded anywhere; there is no model download and no runtime
-dependency. Two stages, both on-device:
+Nothing is uploaded anywhere. Two stages run on-device; the subject model is
+bundled with the app and loaded lazily:
 
 1. **Seeds** (`lib/removeBackground.ts`) — count the whole border ring, take
    the dominant colour cluster plus any shade that chains onto it, plus any
@@ -18,8 +18,9 @@ dependency. Two stages, both on-device:
    channel delta.
 
 `lib/prepareArtwork.ts` is the single entry point. Collection art and custom
-uploads both call it: matte → selfie segmenter (250KB, Apache-2.0, lazy, for
-photos of people) → untouched original.
+uploads both call it: selfie segmenter (250KB, Apache-2.0, lazy) → matte →
+untouched original. If the preferred result keeps an implausible amount of the
+frame, a plausible fallback is promoted automatically.
 
 ## Why this shape
 
@@ -63,7 +64,7 @@ Evaluated against the brief's licence constraints:
 | `@imgly/background-removal` | **AGPL-3.0** | Licence decision for the whole app, not a library choice. Not adopted. |
 | BRIA RMBG-1.4 | **non-commercial** | Ruled out, as flagged. |
 | DeepLabV3 (MediaPipe) | Apache-2.0 | **Measured on our art: bailed 4/6, swiss-cheese mattes.** Trained on photographs; a stylised character is out of distribution. Rejected on quality, not licence. |
-| Selfie segmenter (MediaPipe) | Apache-2.0 | **Shipped**, but only where it belongs — photos of people (custom uploads). |
+| Selfie segmenter (MediaPipe) | Apache-2.0 | **Shipped** as the default subject-aware pass for uploads and collection art; the matte remains the fallback. |
 | **U²-Netp via onnxruntime-web** | Apache-2.0 (model), MIT (runtime) | **The recommended next POC.** Salient-object detection generalises to illustration far better than semantic segmentation. ~4.7MB model + ORT wasm. |
 
 Cost of that path: a real dependency and a multi-MB lazy download for two
@@ -77,17 +78,18 @@ was built and removed because it rejected the good Bullpen cutout while
 passing the mangled Claynosaurz one. So the handling is: **route better, and
 make failure a tap to fix instead of a dead end.**
 
-1. **Routing follows what the image IS.** `prepareArtwork` takes
-   `preferSegmenter`, and uploads pass it. A photo routed matte-first often
-   produced a plausible-looking-but-wrong cutout, "succeeded", and the model
-   that actually understands bodies never ran. Collection art still goes
-   matte-first, where it belongs.
+1. **The subject-aware result comes first.** Both collection art and uploads
+   pass `preferSegmenter`. Sensei #22 proved that the matte can report plausible
+   coverage while erasing most of a dark character; the segmenter preserves it.
+   The matte is still promoted when the model fails or keeps an implausible
+   amount of the frame.
 2. **Losers are kept, not discarded.** `prepareArtwork` returns
    `alternatives` (every other engine that produced something, always ending
    in the untouched original) plus a `suspicious` flag for an implausible
    amount kept or removed. /create shows them as EDGE CUTOUT / AI CUTOUT /
-   KEEP ORIGINAL; the editor's "Remove background" alternates engines on
-   repeat presses.
+   KEEP ORIGINAL. The editor's "Remove background" is deterministic and always
+   reprocesses the untouched artwork, so repeat presses cannot compound alpha
+   or silently switch engines.
 
 This does not make a bad cutout good. It makes it recoverable without the
 brush, which is the honest thing we can do before adding a model that

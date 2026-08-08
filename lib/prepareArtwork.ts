@@ -26,9 +26,9 @@
  *
  * Which goes first is decided by the CALLER, because it depends on what the
  * image is, and the caller is the only one who knows. `preferSegmenter` is
- * what an upload passes: a photo routed matte-first would often produce a
- * plausible-looking-but-wrong result, "succeed", and the model that actually
- * understands bodies would never get a turn.
+ * what photos and subject-aware artwork paths pass: routed matte-first, they
+ * can produce a plausible-looking-but-wrong result and prevent the model that
+ * understands bodies from getting a turn.
  *
  * On the models we did NOT use, since it is easy to re-litigate:
  *   - RMBG-1.4 is excellent and NON-COMMERCIAL; its licence rules it out.
@@ -98,8 +98,7 @@ function opaqueFraction(canvas: HTMLCanvasElement): number {
 export interface PrepareOptions {
   /** Allow the ML fallback. Off for callers that must stay instant. */
   allowSegmenter?: boolean;
-  /** Run the segmenter FIRST and prefer it. Pass true for photographs (any
-   *  custom upload); leave false for collection art. */
+  /** Run the segmenter first and prefer it. */
   preferSegmenter?: boolean;
   /** Crop to the subject once its background is gone. */
   crop?: boolean;
@@ -125,9 +124,22 @@ export async function prepareArtwork(
     allowSegmenter && (preferSegmenter || !matte || isSuspect(matte));
   const segmented = wantSegmenter ? await runSegmenter(source) : null;
 
-  const ordered: PreparedCandidate[] = preferSegmenter
+  const preferred: PreparedCandidate[] = preferSegmenter
     ? [segmented, matte].filter(Boolean as unknown as (c: PreparedCandidate | null) => c is PreparedCandidate)
     : [matte, segmented].filter(Boolean as unknown as (c: PreparedCandidate | null) => c is PreparedCandidate);
+
+  // A preferred engine can still fail without throwing. When its coverage is
+  // implausible and the fallback is plausible, promote the fallback rather
+  // than knowingly returning the broken candidate as the default.
+  const firstPlausible = preferred.findIndex((candidate) => !isSuspect(candidate));
+  const ordered =
+    firstPlausible > 0
+      ? [
+          preferred[firstPlausible],
+          ...preferred.slice(0, firstPlausible),
+          ...preferred.slice(firstPlausible + 1),
+        ]
+      : preferred;
 
   const plain = toCanvas(source);
   if (plain) {

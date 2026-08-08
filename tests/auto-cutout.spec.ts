@@ -167,3 +167,40 @@ test("'Bring back full artwork' restores the background for hand-erasing", async
   await page.getByRole("button", { name: "Undo" }).click();
   await expect.poll(() => editPixel(page, 1, 1).then((p) => p!.a)).toBe(0);
 });
+
+test("repeated smart removal is deterministic and starts from full artwork", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await gotoRecord(page);
+  await selectKeyableNFT(page, KEYABLE);
+  await openEditor(page);
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: /bring back full artwork/i }).click();
+
+  const remove = page.getByRole("button", { name: "Remove background" });
+  await remove.click();
+  await expect(remove).toBeEnabled({ timeout: 60_000 });
+  const first = await page.evaluate(() =>
+    (
+      window as unknown as {
+        __switchMaskEditor?: { getEditCanvas: () => HTMLCanvasElement | null };
+      }
+    ).__switchMaskEditor?.getEditCanvas()?.toDataURL()
+  );
+
+  await remove.click();
+  await expect(remove).toBeEnabled({ timeout: 60_000 });
+  const second = await page.evaluate(() =>
+    (
+      window as unknown as {
+        __switchMaskEditor?: { getEditCanvas: () => HTMLCanvasElement | null };
+      }
+    ).__switchMaskEditor?.getEditCanvas()?.toDataURL()
+  );
+
+  expect(first).toBeTruthy();
+  expect(second).toBe(first);
+  await expect(page.getByText("Smart background removal applied.")).toBeVisible();
+});

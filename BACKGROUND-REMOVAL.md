@@ -86,10 +86,11 @@ make failure a tap to fix instead of a dead end.**
 2. **Losers are kept, not discarded.** `prepareArtwork` returns
    `alternatives` (every other engine that produced something, always ending
    in the untouched original) plus a `suspicious` flag for an implausible
-   amount kept or removed. /create shows them as EDGE CUTOUT / AI CUTOUT /
-   KEEP ORIGINAL. The editor's "Remove background" is deterministic and always
-   reprocesses the untouched artwork, so repeat presses cannot compound alpha
-   or silently switch engines.
+   amount kept or removed. `/create` intentionally offers only the smart CUTOUT
+   and KEEP ORIGINAL; the unreliable edge result is replaced by an EDIT action
+   that opens the full mask editor. The editor's "Remove background" is
+   deterministic and always reprocesses the untouched artwork, so repeat
+   presses cannot compound alpha or silently switch engines.
 
 This does not make a bad cutout good. It makes it recoverable without the
 brush, which is the honest thing we can do before adding a model that

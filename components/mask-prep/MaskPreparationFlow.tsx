@@ -36,6 +36,7 @@ import {
   exportTransparentCanvas,
   loadImage,
   loadSavedMask,
+  MY_AVATARS,
   nftMaskKey,
   saveUserMask,
   USER_MASK_VERSION,
@@ -67,6 +68,9 @@ interface MaskPreparationFlowProps {
   nft: NFT;
   existingRecord: SavedUserMask | null;
   existingImage: HTMLImageElement | null;
+  /** Original local upload for a newly-created avatar. Once saved it lives on
+   *  the SavedUserMask record and is loaded automatically on later edits. */
+  artworkBlob?: Blob | null;
   videoRef: RefObject<HTMLVideoElement | null>;
   landmarkerRef: RefObject<FaceLandmarker | null>;
   canvasRef: RefObject<HTMLCanvasElement | null>;
@@ -168,6 +172,7 @@ export function MaskPreparationFlow({
   nft,
   existingRecord,
   existingImage,
+  artworkBlob = null,
   videoRef,
   landmarkerRef,
   canvasRef,
@@ -178,7 +183,12 @@ export function MaskPreparationFlow({
   backLabel = "Choose another PFP",
   onHome,
 }: MaskPreparationFlowProps) {
-  const starting = useStartingMask(nft, existingRecord, existingImage);
+  const starting = useStartingMask(
+    nft,
+    existingRecord,
+    existingImage,
+    artworkBlob
+  );
   // `nft.image` is a `custom:` token for uploaded avatars, so it can never be
   // rendered directly; fall back to whatever bitmap we actually have.
   const headerThumb = nft.image.startsWith("custom:")
@@ -202,6 +212,12 @@ export function MaskPreparationFlow({
         tokenId: String(nft.id),
         tokenName: nft.name,
         sourceImageUrl: nft.image,
+        sourceImageBlob:
+          artworkBlob ?? existingRecord?.sourceImageBlob ?? undefined,
+        sourceImageType:
+          artworkBlob?.type === "image/png" || artworkBlob?.type === "image/webp"
+            ? artworkBlob.type
+            : existingRecord?.sourceImageType,
         editedMaskBlob: blob,
         editedMaskType: type,
         maskMode,
@@ -232,6 +248,9 @@ export function MaskPreparationFlow({
     [
       existingRecord?.createdAt,
       existingRecord?.faceAnchors,
+      existingRecord?.sourceImageBlob,
+      existingRecord?.sourceImageType,
+      artworkBlob,
       nft,
       onComplete,
       starting.placement,
@@ -427,14 +446,19 @@ function PrepShell({
 function useStartingMask(
   nft: NFT,
   existingRecord: SavedUserMask | null,
-  existingImage: HTMLImageElement | null
+  existingImage: HTMLImageElement | null,
+  suppliedArtworkBlob: Blob | null
 ): StartingMaskState {
+  const isCustomAvatar = nft.collection === MY_AVATARS;
+  const storedArtwork = useBlobImage(
+    suppliedArtworkBlob ?? existingRecord?.sourceImageBlob ?? null
+  );
   const headMask = useHeadMask(nft);
   const shouldLoadOriginal =
     headMask.status === "unsupported" || headMask.status === "rejected";
   const autoCutout = usesAutoCutout(nft.collection);
   const { image: rawImage, status: rawStatus } = useNFTImage(
-    shouldLoadOriginal ? nft.image : undefined
+    shouldLoadOriginal && !isCustomAvatar ? nft.image : undefined
   );
   const [autoImage, setAutoImage] = useState<HTMLImageElement | null>(null);
   const [autoStatus, setAutoStatus] = useState<"idle" | "processing" | "ready" | "error">("idle");
@@ -498,6 +522,32 @@ function useStartingMask(
   }, [rawImage, rawStatus, shouldLoadOriginal, autoCutout]);
 
   const existing = existingImage;
+
+  // A custom avatar's public-looking `custom:` URL is only an IndexedDB key,
+  // never a fetchable image. Use the locally stored source Blob instead. New
+  // avatars receive it directly from /create; saved avatars read it from their
+  // record. Legacy records without a source still edit cleanly, just without
+  // Restore/Remove-background controls or a misleading network warning.
+  if (isCustomAvatar && existing) {
+    if (storedArtwork.status === "loading") {
+      return {
+        status: "processing",
+        seedImage: null,
+        initialImage: null,
+        artworkImage: null,
+        placement: existingRecord?.placement ?? null,
+        source: existingRecord ? "saved" : "automatic",
+      };
+    }
+    return {
+      status: "ready",
+      seedImage: existing,
+      initialImage: existing,
+      artworkImage: storedArtwork.image,
+      placement: existingRecord?.placement ?? null,
+      source: existingRecord ? "saved" : "automatic",
+    };
+  }
 
   if (headMask.status === "available" && headMask.image) {
     return {
@@ -565,6 +615,44 @@ function useStartingMask(
     placement: null,
     source: "approved",
   };
+}
+
+function useBlobImage(blob: Blob | null) {
+  const [state, setState] = useState<{
+    image: HTMLImageElement | null;
+    status: "idle" | "loading" | "ready" | "error";
+  }>({ image: null, status: blob ? "loading" : "idle" });
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!blob) {
+      const t = window.setTimeout(
+        () => setState({ image: null, status: "idle" }),
+        0
+      );
+      return () => window.clearTimeout(t);
+    }
+
+    const url = URL.createObjectURL(blob);
+    const t = window.setTimeout(() => {
+      if (!cancelled) setState({ image: null, status: "loading" });
+      void loadImage(url)
+        .then((image) => {
+          if (!cancelled) setState({ image, status: "ready" });
+        })
+        .catch(() => {
+          if (!cancelled) setState({ image: null, status: "error" });
+        });
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+      URL.revokeObjectURL(url);
+    };
+  }, [blob]);
+
+  return state;
 }
 
 /**

@@ -18,8 +18,10 @@ import {
   useState,
   type ChangeEvent,
 } from "react";
+import type { FaceLandmarker } from "@mediapipe/tasks-vision";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { ImagePlus, Trash2, ShieldCheck } from "lucide-react";
+import { ImagePlus, Pencil, Trash2, ShieldCheck } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 import {
   prepareArtwork,
@@ -41,6 +43,7 @@ import { PixelButton } from "@/components/ui/PixelButton";
 import { BlinkingCursor } from "@/components/ui/BlinkingCursor";
 import { isModelCached, prefetchModel } from "@/lib/modelPrefetch";
 import { BASE_PATH } from "@/lib/basePath";
+import { MaskPreparationFlow } from "@/components/mask-prep/MaskPreparationFlow";
 
 /** The subject model the upload path uses. Downloaded once per device. */
 const SEGMENTER_URL = `${BASE_PATH}/mediapipe/selfie_segmenter.tflite`;
@@ -61,14 +64,18 @@ const MAX_SOURCE_DIM = 2048; // downscale huge camera rolls before processing
 type Stage =
   | { kind: "idle" }
   | { kind: "processing"; step: PrepStep; ratio: number | null }
-  | {
-      kind: "preview";
-      /** Every result we got, best first — the user picks. */
-      options: PreparedCandidate[];
-      /** Open the picker straight away because the best guess looks off. */
-      suspicious: boolean;
-    }
+  | ({ kind: "preview" } & PreviewData)
+  | { kind: "editor"; preview: PreviewData; initialImage: HTMLImageElement }
   | { kind: "saving" };
+
+interface PreviewData {
+  id: number;
+  /** Useful choices only: the smart cutout and untouched original. */
+  options: PreparedCandidate[];
+  suspicious: boolean;
+  /** Original local upload retained for the full editor and later edits. */
+  artworkBlob: Blob;
+}
 
 /** Letterbox any image into a square canvas (the mask pipeline is square). */
 function squareCanvas(img: HTMLImageElement): HTMLCanvasElement {
@@ -88,6 +95,9 @@ export default function CreatePage() {
   const router = useRouter();
   const setSelectedNFT = useAppStore((s) => s.setSelectedNFT);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const editorVideoRef = useRef<HTMLVideoElement | null>(null);
+  const editorLandmarkerRef = useRef<FaceLandmarker | null>(null);
+  const editorCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [stage, setStage] = useState<Stage>({ kind: "idle" });
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<SavedUserMask[]>([]);
@@ -160,18 +170,29 @@ export default function CreatePage() {
           setStage({ kind: "processing", step: "finding", ratio: null });
         }
 
-        // An upload is a PHOTOGRAPH, so the model that understands people
-        // goes first here — the geometric matte knows edges, not bodies, and
-        // routing photos to it first is how a plausible-but-wrong cutout got
-        // to win silently. Whatever loses is kept as an alternative.
-        const prepared = await prepareArtwork(img, { preferSegmenter: true });
+        // Use the subject-aware result and retain the untouched square source
+        // locally. The edge matte is not offered for uploads: it is unreliable
+        // on portraits/complex art, while the full editor is a useful recovery
+        // path when the smart cutout needs adjustment.
+        const source = squareCanvas(img);
+        const prepared = await prepareArtwork(source, {
+          preferSegmenter: true,
+        });
+        const artwork = await exportTransparentCanvas(source);
+        const options = [
+          {
+            canvas: prepared.canvas,
+            via: prepared.via,
+            coverage: prepared.coverage,
+          },
+          ...prepared.alternatives,
+        ].filter((candidate) => candidate.via !== "matte");
         setStage({
           kind: "preview",
-          options: [
-            { canvas: prepared.canvas, via: prepared.via, coverage: prepared.coverage },
-            ...prepared.alternatives,
-          ],
+          id: Date.now(),
+          options,
           suspicious: prepared.suspicious,
+          artworkBlob: artwork.blob,
         });
       } finally {
         URL.revokeObjectURL(url);
@@ -183,11 +204,14 @@ export default function CreatePage() {
   }, []);
 
   const wear = useCallback(
-    async (canvas: HTMLCanvasElement) => {
+    async (
+      canvas: HTMLCanvasElement,
+      id: number,
+      artworkBlob: Blob
+    ) => {
       setStage({ kind: "saving" });
       try {
         const exported = await exportTransparentCanvas(canvas);
-        const id = Date.now();
         const key = maskKey(MY_AVATARS, id);
         const sourceImageUrl = `custom:${key}`;
         const record: SavedUserMask = {
@@ -196,6 +220,9 @@ export default function CreatePage() {
           tokenId: String(id),
           tokenName: "My Avatar",
           sourceImageUrl,
+          sourceImageBlob: artworkBlob,
+          sourceImageType:
+            artworkBlob.type === "image/png" ? "image/png" : "image/webp",
           editedMaskBlob: exported.blob,
           editedMaskType: exported.type,
           maskMode: "adjusted",
@@ -226,6 +253,21 @@ export default function CreatePage() {
     [router, setSelectedNFT]
   );
 
+  const edit = useCallback(
+    async (canvas: HTMLCanvasElement, preview: PreviewData) => {
+      setStage({ kind: "saving" });
+      try {
+        const exported = await exportTransparentCanvas(canvas);
+        const initialImage = await blobToImage(exported.blob);
+        setStage({ kind: "editor", preview, initialImage });
+      } catch {
+        setError("Could not open the editor for this image. Try another one.");
+        setStage({ kind: "preview", ...preview });
+      }
+    },
+    []
+  );
+
   const wearSaved = useCallback(
     (r: SavedUserMask) => {
       setSelectedNFT({
@@ -250,6 +292,44 @@ export default function CreatePage() {
     },
     [refresh]
   );
+
+  if (stage.kind === "editor") {
+    const nft = {
+      id: stage.preview.id,
+      collection: MY_AVATARS,
+      name: "My Avatar",
+      image: `custom:${maskKey(MY_AVATARS, stage.preview.id)}`,
+    };
+    return createPortal(
+      <div className="fixed inset-0 z-[60] bg-screen">
+        <MaskPreparationFlow
+          nft={nft}
+          existingRecord={null}
+          existingImage={stage.initialImage}
+          artworkBlob={stage.preview.artworkBlob}
+          videoRef={editorVideoRef}
+          landmarkerRef={editorLandmarkerRef}
+          canvasRef={editorCanvasRef}
+          skipChoiceToEditor
+          livePreview={false}
+          backLabel="Back to preview"
+          onChooseAnother={() =>
+            setStage({ kind: "preview", ...stage.preview })
+          }
+          onComplete={({ record }) => {
+            setSelectedNFT({
+              id: Number(record.tokenId),
+              collection: record.collectionId,
+              name: record.tokenName ?? "My Avatar",
+              image: record.sourceImageUrl,
+            });
+            router.push("/record");
+          }}
+        />
+      </div>,
+      document.body
+    );
+  }
 
   return (
     // No wordmark/header of its own: this route renders inside AppShell, which
@@ -366,7 +446,17 @@ export default function CreatePage() {
           <PreviewStage
             options={stage.options}
             suspicious={stage.suspicious}
-            onWear={wear}
+            onWear={(canvas) =>
+              wear(canvas, stage.id, stage.artworkBlob)
+            }
+            onEdit={(canvas) =>
+              edit(canvas, {
+                id: stage.id,
+                options: stage.options,
+                suspicious: stage.suspicious,
+                artworkBlob: stage.artworkBlob,
+              })
+            }
             onRetry={() => setStage({ kind: "idle" })}
           />
         )}
@@ -379,11 +469,13 @@ function PreviewStage({
   options,
   suspicious,
   onWear,
+  onEdit,
   onRetry,
 }: {
   options: PreparedCandidate[];
   suspicious: boolean;
   onWear: (c: HTMLCanvasElement) => void;
+  onEdit: (c: HTMLCanvasElement) => void;
   onRetry: () => void;
 }) {
   const [picked, setPicked] = useState(0);
@@ -412,15 +504,14 @@ function PreviewStage({
         <canvas ref={viewRef} className="h-full w-full" />
       </div>
 
-      {/* The whole point: neither engine can tell when it got the subject
-          wrong, so rather than shipping a silent bad cutout we show what
-          each one produced and let the person looking at it choose. */}
+      {/* Smart cutout or original only. The weak edge engine was removed; the
+          full editor is the recovery path when the result needs adjustment. */}
       {options.length > 1 && (
         <div className="flex flex-col gap-2">
           <p className="text-center text-sm text-cream/55">
             {suspicious
-              ? "This one looks off — try another version:"
-              : "Not quite right? Try another version:"}
+              ? "The cutout needs a little help:"
+              : "Choose the cutout or keep the full image:"}
           </p>
           <div className="flex gap-2">
             {options.map((o, i) => (
@@ -441,23 +532,31 @@ function PreviewStage({
         </div>
       )}
 
-      <div className="flex gap-2">
-        <PixelButton variant="secondary" className="flex-1" onClick={onRetry}>
-          PICK ANOTHER
+      <div className="grid grid-cols-2 gap-2">
+        <PixelButton
+          variant="secondary"
+          className="flex-1"
+          onClick={() => onEdit(choice.canvas)}
+        >
+          <Pencil size={15} strokeWidth={2.5} />
+          EDIT
         </PixelButton>
         <PixelButton className="flex-1" onClick={() => onWear(choice.canvas)}>
           WEAR IT
         </PixelButton>
       </div>
-      <p className="text-center text-xs text-cream/40">
-        You can still fix the edges by hand in the mask editor.
-      </p>
+      <button
+        onClick={onRetry}
+        className="mx-auto px-4 py-2 text-xs text-cream/50 transition-colors hover:text-cream active:scale-[0.98]"
+      >
+        Pick another image
+      </button>
     </div>
   );
 }
 
 const VIA_LABEL: Record<PrepareVia, string> = {
-  segmenter: "AI CUTOUT",
-  matte: "EDGE CUTOUT",
+  segmenter: "CUTOUT",
+  matte: "CUTOUT",
   original: "KEEP ORIGINAL",
 };

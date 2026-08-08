@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import sharp from "sharp";
 
 /**
@@ -23,13 +23,7 @@ async function fixturePng(): Promise<Buffer> {
   return sharp(Buffer.from(svg)).png().toBuffer();
 }
 
-test("upload → wear → persisted on device → delete", async ({ page }) => {
-  test.setTimeout(180_000);
-
-  await page.goto("/create");
-  await expect(page.getByText(/Processed on your device/i)).toBeVisible();
-
-  // Upload. Processing runs the segmenter (wasm, CPU) — give it room.
+async function uploadFixture(page: Page) {
   const [chooser] = await Promise.all([
     page.waitForEvent("filechooser"),
     page.getByRole("button", { name: /Upload a photo/i }).click(),
@@ -39,17 +33,26 @@ test("upload → wear → persisted on device → delete", async ({ page }) => {
     mimeType: "image/png",
     buffer: await fixturePng(),
   });
+  await expect(page.getByRole("button", { name: "WEAR IT" })).toBeVisible({
+    timeout: 60_000,
+  });
+}
+
+test("upload → wear → persisted on device → delete", async ({ page }) => {
+  test.setTimeout(180_000);
+
+  await page.goto("/create");
+  await expect(page.getByText(/Processed on your device/i)).toBeVisible();
+
+  // Upload. Processing runs the segmenter (wasm, CPU) — give it room.
+  await uploadFixture(page);
 
   // Automatic still: a result is already on screen and WEAR IT is one tap.
   // What we also pin here is the recovery path — neither engine can tell when
   // it got the subject wrong, so whatever else succeeded is offered as an
   // alternative rather than the user being stuck with a bad cutout.
-  await expect(page.getByRole("button", { name: "WEAR IT" })).toBeVisible({
-    timeout: 60_000,
-  });
-  await expect(
-    page.getByRole("button", { name: /KEEP ORIGINAL/i })
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /EDGE CUTOUT/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "EDIT" })).toBeVisible();
   await page.getByRole("button", { name: "WEAR IT" }).click();
 
   // Lands in the recorder actually wearing it (mask loaded from IndexedDB).
@@ -65,7 +68,11 @@ test("upload → wear → persisted on device → delete", async ({ page }) => {
       req.onsuccess = () => res(req.result);
       req.onerror = () => rej(req.error);
     });
-    const all = await new Promise<{ key: string; editedMaskBlob: Blob }[]>(
+    const all = await new Promise<{
+      key: string;
+      editedMaskBlob: Blob;
+      sourceImageBlob?: Blob;
+    }[]>(
       (res, rej) => {
         const get = db.transaction("masks").objectStore("masks").getAll();
         get.onsuccess = () => res(get.result);
@@ -74,13 +81,17 @@ test("upload → wear → persisted on device → delete", async ({ page }) => {
     );
     return all
       .filter((r) => r.key.startsWith("my-avatars:"))
-      .map((r) => ({ key: r.key, size: r.editedMaskBlob?.size ?? 0 }));
+      .map((r) => ({
+        key: r.key,
+        size: r.editedMaskBlob?.size ?? 0,
+        sourceSize: r.sourceImageBlob?.size ?? 0,
+      }));
   });
   expect(stored.length).toBe(1);
-  // Just "a real bitmap got stored". Deliberately loose: now that the matte
-  // runs on uploads too, what lands here is a cut-out shape on transparency,
-  // which compresses far smaller than the original photo did.
+  // Both the wearable cutout and untouched local source are real bitmaps. The
+  // source is what gives later edits Restore/Remove-background parity.
   expect(stored[0].size).toBeGreaterThan(200);
+  expect(stored[0].sourceSize).toBeGreaterThan(200);
 
   // Back on /create it is listed — the "see them again" half of the promise.
   await page.goto("/create");
@@ -90,6 +101,63 @@ test("upload → wear → persisted on device → delete", async ({ page }) => {
   // …and deletable.
   await page.getByLabel("Delete this avatar").click();
   await expect(wearSaved).toHaveCount(0);
+});
+
+test("custom avatar gets the full mobile editor before and after wearing", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/create");
+  await uploadFixture(page);
+
+  await expect(page.getByRole("button", { name: /EDGE CUTOUT/i })).toHaveCount(0);
+  await page.getByRole("button", { name: "EDIT" }).click();
+  await page.waitForFunction(
+    () =>
+      !!(
+        window as unknown as {
+          __switchMaskEditor?: { getEditCanvas: () => HTMLCanvasElement | null };
+        }
+      ).__switchMaskEditor?.getEditCanvas(),
+    undefined,
+    { timeout: 30_000 }
+  );
+
+  await expect(page.getByText(/original art is not reachable/i)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Brush ·/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "More options" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
+
+  await page.getByRole("button", { name: "More options" }).click();
+  await expect(page.getByText("Adjust fit")).toBeVisible();
+  await expect(page.getByLabel("Left / right")).toBeVisible();
+  await expect(page.getByLabel("Up / down")).toBeVisible();
+  await expect(page.getByLabel("Scale")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Remove background" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Bring back full artwork/i })).toBeVisible();
+  await page.getByRole("button", { name: "Close" }).last().click();
+
+  await page.getByRole("button", { name: "Save" }).click();
+  await page.waitForURL(/\/record/, { timeout: 30_000 });
+  await page.getByRole("button", { name: "Edit mask" }).click();
+  await page.waitForFunction(
+    () =>
+      !!(
+        window as unknown as {
+          __switchMaskEditor?: { getEditCanvas: () => HTMLCanvasElement | null };
+        }
+      ).__switchMaskEditor?.getEditCanvas(),
+    undefined,
+    { timeout: 30_000 }
+  );
+
+  await expect(page.getByText(/original art is not reachable/i)).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Preview", exact: true })
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "More options" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
 });
 
 test("the gallery offers the create-your-own card", async ({ page }) => {

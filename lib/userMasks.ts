@@ -30,6 +30,12 @@ export interface SavedUserMask {
   tokenId: string;
   tokenName?: string;
   sourceImageUrl: string;
+  /** Original local upload, before background removal or hand editing. Custom
+   *  avatars keep this Blob in IndexedDB so their full editor can offer the
+   *  same Restore/Remove background tools as collection artwork. Older records
+   *  omit it and continue using their saved cutout. */
+  sourceImageBlob?: Blob;
+  sourceImageType?: "image/webp" | "image/png";
   editedMaskBlob: Blob;
   editedMaskType: "image/webp" | "image/png";
   /** "full" = kept the whole character, "adjusted" = edited in the mask editor.

@@ -363,32 +363,44 @@ export function FaceMaskCanvas({
         // VIDEO frame, so they need the same mirror the camera draw got —
         // otherwise reaching right moves the catcher left and the game feels
         // broken rather than hard.
-        const hands: CatchHand[] = [];
         const hl = handsRef.current?.current;
         if (hl) {
+          const hands: CatchHand[] = [];
           try {
             const res = hl.detectForVideo(video, now);
             for (const lm of res.landmarks ?? []) {
-              // 0 = wrist, 9 = middle-finger base. Their midpoint is the palm,
-              // and their distance is a decent proxy for hand size, so the
-              // catch radius scales with how close the player is.
-              const wrist = lm[0];
-              const mid = lm[9];
-              if (!wrist || !mid) continue;
-              const px = ((wrist.x + mid.x) / 2) * w;
-              const py = ((wrist.y + mid.y) / 2) * h;
-              const span = Math.hypot((mid.x - wrist.x) * w, (mid.y - wrist.y) * h);
+              // Centre the catcher on the palm polygon and size it from palm
+              // width. Wrist-to-finger distance made the collision circle grow
+              // when pointing, causing catches far away from the visible hand.
+              const palm = [lm[0], lm[5], lm[9], lm[13], lm[17]];
+              if (palm.some((point) => !point)) continue;
+              const px =
+                (palm.reduce((sum, point) => sum + point.x, 0) / palm.length) * w;
+              const py =
+                (palm.reduce((sum, point) => sum + point.y, 0) / palm.length) * h;
+              const indexBase = lm[5];
+              const pinkyBase = lm[17];
+              const palmWidth = Math.hypot(
+                (indexBase.x - pinkyBase.x) * w,
+                (indexBase.y - pinkyBase.y) * h
+              );
+              const short = Math.min(w, h);
               hands.push({
                 x: cameraMirror ? w - px : px,
                 y: py,
-                r: Math.max(w * 0.05, span * 1.6),
+                r: Math.max(
+                  short * 0.035,
+                  Math.min(short * 0.085, palmWidth * 0.58)
+                ),
               });
             }
           } catch {
             /* detector not ready this frame — the round just gets a gap */
           }
+          game.update(frameDt, w, h, hands);
         }
-        game.update(frameDt, w, h, hands);
+        // While the hand model is loading, do not consume the countdown or the
+        // round. The user should get the full 30 seconds once tracking is real.
         game.draw(ctx);
       }
 

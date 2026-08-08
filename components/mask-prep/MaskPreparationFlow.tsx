@@ -31,7 +31,6 @@ import {
 import type { FaceLandmarker } from "@mediapipe/tasks-vision";
 import type { NFT } from "@/lib/types";
 import type { MaskPlacement } from "@/lib/imageUtils";
-import { removeBackground } from "@/lib/removeBackground";
 import {
   blobToImage,
   exportTransparentCanvas,
@@ -468,7 +467,10 @@ function useStartingMask(
     setAutoStatus("processing");
     const frame = window.requestAnimationFrame(async () => {
       try {
-        const canvas = removeBackground(rawImage);
+        const prepared = await prepareArtwork(rawImage, {
+          allowSegmenter: false,
+        });
+        const canvas = prepared.via === "original" ? null : prepared.canvas;
         const img = canvas
           ? await loadImage(canvas.toDataURL("image/png"))
           : rawImage;

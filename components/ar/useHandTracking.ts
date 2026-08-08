@@ -51,11 +51,12 @@ export function useHandTracking(enabled: boolean) {
           },
           runningMode: "VIDEO",
           numHands: 2,
-          // Loose thresholds on purpose: a hand that flickers out mid-catch
-          // is worse than an occasional false positive in a catch game.
-          minHandDetectionConfidence: 0.4,
-          minHandPresenceConfidence: 0.4,
-          minTrackingConfidence: 0.4,
+          // A false hand makes the score jump when the player touched nothing,
+          // which feels random. Keep tracking moderately sticky, but require a
+          // credible detection/presence before it can become a catcher.
+          minHandDetectionConfidence: 0.62,
+          minHandPresenceConfidence: 0.58,
+          minTrackingConfidence: 0.55,
         });
         if (cancelled) {
           hands.close();

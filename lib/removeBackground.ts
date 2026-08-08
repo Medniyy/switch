@@ -114,6 +114,11 @@ export function removeBackground(
   // cutout, and shipping it would be worse than the untouched square.
   if (matte.clearedFraction < 0.02 || matte.clearedFraction > 0.94) return null;
 
+  // The path matte separates the large regions well, but detailed artwork can
+  // still leave tiny detached backdrop flecks or pinholes inside a face. Clean
+  // only components that are far too small to be intentional artwork; broad
+  // regions are left alone for the brush/alternative cutout rather than guessed.
+  polishAlphaTopology(matte.alpha, w, h);
 
   for (let p = 0; p < w * h; p++) {
     const a = matte.alpha[p];
@@ -163,6 +168,72 @@ export function removeBackground(
   const sy = Math.max(0, Math.min(h - side, Math.round(cy - side / 2)));
   octx.drawImage(canvas, sx, sy, side, side, 0, 0, side, side);
   return out;
+}
+
+/**
+ * Conservative component cleanup for a subject alpha matte.
+ *
+ * - Very small opaque islands are removed unless they belong to the dominant
+ *   subject component. This clears confetti-like backdrop crumbs.
+ * - Very small transparent components that cannot reach the frame are filled.
+ *   These are the eye/cheek pinholes created by a noisy soft outline.
+ *
+ * Limits scale with the image and stay deliberately tiny: this is polish, not
+ * a second subject detector.
+ */
+function polishAlphaTopology(alpha: Uint8Array, w: number, h: number) {
+  const n = w * h;
+  if (!n || alpha.length !== n) return;
+  const seen = new Uint8Array(n);
+  const queue = new Int32Array(n);
+  const islandLimit = Math.max(10, Math.round(n * 0.00035));
+  const holeLimit = Math.max(8, Math.round(n * 0.0005));
+
+  const collect = (start: number, subject: boolean) => {
+    let head = 0;
+    let tail = 0;
+    let touchesBorder = false;
+    queue[tail++] = start;
+    seen[start] = 1;
+    while (head < tail) {
+      const p = queue[head++];
+      const x = p % w;
+      const y = (p / w) | 0;
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) touchesBorder = true;
+      const visit = (q: number) => {
+        if (seen[q]) return;
+        const isSubject = alpha[q] >= 48;
+        if (isSubject !== subject) return;
+        seen[q] = 1;
+        queue[tail++] = q;
+      };
+      if (x > 0) visit(p - 1);
+      if (x + 1 < w) visit(p + 1);
+      if (y > 0) visit(p - w);
+      if (y + 1 < h) visit(p + w);
+    }
+    return { size: tail, touchesBorder };
+  };
+
+  // First pass: detached opaque crumbs.
+  for (let p = 0; p < n; p++) {
+    if (seen[p] || alpha[p] < 48) continue;
+    const component = collect(p, true);
+    if (component.size <= islandLimit) {
+      for (let i = 0; i < component.size; i++) alpha[queue[i]] = 0;
+    }
+  }
+
+  seen.fill(0);
+  // Second pass: enclosed transparent pinholes. Never fill anything connected
+  // to the outer background, even when it happens to be narrow.
+  for (let p = 0; p < n; p++) {
+    if (seen[p] || alpha[p] >= 48) continue;
+    const component = collect(p, false);
+    if (!component.touchesBorder && component.size <= holeLimit) {
+      for (let i = 0; i < component.size; i++) alpha[queue[i]] = 255;
+    }
+  }
 }
 
 
@@ -281,4 +352,3 @@ function borderPalette(
   }
   return chosen.map((c) => c.rgb);
 }
-

@@ -130,6 +130,7 @@ export function PhotoEditor({
 
   const [slots, setSlots] = useState<MonkeSlot[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [mobileAdjustOpen, setMobileAdjustOpen] = useState(false);
   const [pickingForId, setPickingForId] = useState<string | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   /** Custom avatars have no collection behind them (see addUploadedSlot). */
@@ -281,9 +282,10 @@ export function PhotoEditor({
   // drag/resize, or ADD MONKE for more.
   useEffect(() => {
     const p = initialPlacement;
+    const id = uid();
     setSlots([
       {
-        id: uid(),
+        id,
         cx: p?.cx ?? photo.w / 2,
         cy: p?.cy ?? photo.h / 2,
         size: p
@@ -296,6 +298,10 @@ export function PhotoEditor({
         source: "auto",
       },
     ]);
+    // The pre-placed artwork is the thing the user came here to adjust. Select
+    // it up front so mobile precision controls are immediately discoverable;
+    // requiring a tap on the artwork first made the entire control row vanish.
+    setSelectedId(id);
     // initialNFT/initialPlacement are fixed for a given capture; photo identity
     // drives this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -335,7 +341,7 @@ export function PhotoEditor({
       });
       // Same on-device pipeline the rest of the app uses, so an uploaded face
       // arrives with its background already gone.
-      const prepared = await prepareArtwork(raw);
+      const prepared = await prepareArtwork(raw, { preferSegmenter: true });
       const image = await new Promise<HTMLImageElement>((res, rej) => {
         const i = new Image();
         i.onload = () => res(i);
@@ -403,6 +409,7 @@ export function PhotoEditor({
   const removeSlot = (id: string) => {
     setSlots((prev) => prev.filter((s) => s.id !== id));
     setSelectedId(null);
+    setMobileAdjustOpen(false);
   };
 
   const resizeSelected = (size: number) => {
@@ -414,6 +421,16 @@ export function PhotoEditor({
   const rotateSelected = (rot: number) => {
     setSlots((prev) =>
       prev.map((s) => (s.id === selectedId ? { ...s, rot } : s))
+    );
+  };
+
+  const positionSelected = (axis: "x" | "y", value: number) => {
+    setSlots((prev) =>
+      prev.map((s) =>
+        s.id === selectedId
+          ? { ...s, [axis === "x" ? "cx" : "cy"]: value }
+          : s
+      )
     );
   };
 
@@ -671,8 +688,8 @@ export function PhotoEditor({
         {/* Per-monke controls when one is selected */}
         {selected && selected.cutout && (
           <div className="flex items-center gap-2 justify-center md:justify-start">
-            {/* Desktop size + rotation sliders; on mobile you pinch the monke to
-                resize and twist two fingers to rotate. */}
+            {/* Desktop keeps precision controls inline. Mobile gets the same
+                controls in a one-hand sheet; pinch remains only a shortcut. */}
             <input
               type="range"
               min={0}
@@ -695,6 +712,12 @@ export function PhotoEditor({
               className="flex-1 hidden md:block"
               aria-label="PFP rotation"
             />
+            <button
+              onClick={() => setMobileAdjustOpen(true)}
+              className="md:hidden h-10 rounded-full border-[2px] border-banana/55 bg-banana/10 px-4 font-[family-name:var(--font-display)] text-[10px] text-banana active:scale-95"
+            >
+              ADJUST
+            </button>
             {/* Uniform-height per-monke controls. */}
             <button
               onClick={flipSelected}
@@ -795,6 +818,66 @@ export function PhotoEditor({
         </div>
       </div>
 
+      {mobileAdjustOpen && selected?.cutout && (
+        <div className="absolute inset-0 z-50 flex items-end md:hidden">
+          <button
+            className="absolute inset-0 bg-screen/35"
+            onClick={() => setMobileAdjustOpen(false)}
+            aria-label="Close adjustments"
+          />
+          <div className="relative w-full rounded-t-[24px] border-t border-cream/15 bg-grid/95 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur-md">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <p className="font-[family-name:var(--font-display)] text-sm text-cream">
+                  Adjust image
+                </p>
+                <p className="mt-1 text-xs text-cream/50">
+                  Precise controls for the selected artwork.
+                </p>
+              </div>
+              <button
+                onClick={() => setMobileAdjustOpen(false)}
+                className="h-10 rounded-full border border-cream/20 px-4 font-[family-name:var(--font-display)] text-[10px] text-cream/75 active:scale-95"
+              >
+                DONE
+              </button>
+            </div>
+            <MobilePlacementSlider
+              label="Size"
+              value={sizeToSlider(selected.size)}
+              min={0}
+              max={SIZE_SLIDER_STEPS}
+              onChange={(value) => resizeSelected(sliderToSize(value))}
+              output={`${Math.round((selected.size / Math.min(photo.w, photo.h)) * 100)}%`}
+            />
+            <MobilePlacementSlider
+              label="Left / right"
+              value={selected.cx}
+              min={-photo.w * 0.5}
+              max={photo.w * 1.5}
+              onChange={(value) => positionSelected("x", value)}
+              output={`${Math.round((selected.cx / photo.w) * 100)}%`}
+            />
+            <MobilePlacementSlider
+              label="Up / down"
+              value={selected.cy}
+              min={-photo.h * 0.5}
+              max={photo.h * 1.5}
+              onChange={(value) => positionSelected("y", value)}
+              output={`${Math.round((selected.cy / photo.h) * 100)}%`}
+            />
+            <MobilePlacementSlider
+              label="Rotation"
+              value={Math.round((selected.rot * 180) / Math.PI)}
+              min={-180}
+              max={180}
+              onChange={(value) => rotateSelected((value * Math.PI) / 180)}
+              output={`${Math.round((selected.rot * 180) / Math.PI)}°`}
+            />
+          </div>
+        </div>
+      )}
+
       {pickingForId && (
         <NumberPickSheet
           collectionDefault={initialNFT?.collection ?? "smb-gen2"}
@@ -853,6 +936,43 @@ export function PhotoEditor({
  *  of the mask that would be used and the contextual choices: an already-saved
  *  mask can be used as-is or re-edited; a fresh PFP can be kept whole or
  *  customized. "Remember for this photo" applies the choice to later PFPs. */
+function MobilePlacementSlider({
+  label,
+  value,
+  min,
+  max,
+  output,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  output: string;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="mt-3 block">
+      <span className="flex items-center justify-between text-sm text-cream/70">
+        <span>{label}</span>
+        <span className="font-[family-name:var(--font-display)] text-[10px] tabular-nums text-banana">
+          {output}
+        </span>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={1}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="mt-2 w-full"
+        aria-label={label}
+      />
+    </label>
+  );
+}
+
 function PfpChoiceSheet({
   nft,
   previewSrc,

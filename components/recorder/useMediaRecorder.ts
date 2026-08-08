@@ -46,9 +46,27 @@ const MIME_CANDIDATES = [
   "video/webm",
 ];
 
+/**
+ * Safari's MediaRecorder is much less tolerant of RFC-style codec strings
+ * than Chromium's implementation. In particular, affected iPhones will
+ * accept an explicit AVC/AAC string, construct successfully, and then emit a
+ * movie whose audio track is empty. Let WebKit choose its native MP4 profile;
+ * it records the original microphone track as AAC. Chromium keeps the
+ * explicit AAC-first order because its bare MP4 choice may otherwise be Opus.
+ */
+function mimeCandidates(): string[] {
+  if (!webAudioTrackIsUnreliable()) return MIME_CANDIDATES;
+  return [
+    "video/mp4",
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+    "video/mp4;codecs=avc1,mp4a.40.2",
+    "video/mp4;codecs=avc1",
+  ];
+}
+
 function pickMimeType(): string | null {
   if (typeof MediaRecorder === "undefined") return null;
-  for (const t of MIME_CANDIDATES) {
+  for (const t of mimeCandidates()) {
     if (MediaRecorder.isTypeSupported(t)) return t;
   }
   return null;
@@ -65,7 +83,7 @@ function createFallbackRecorder(
   bitrate: number
 ): { recorder: MediaRecorder; mimeType: string } | null {
   if (typeof MediaRecorder === "undefined") return null;
-  for (const mimeType of MIME_CANDIDATES) {
+  for (const mimeType of mimeCandidates()) {
     if (!MediaRecorder.isTypeSupported(mimeType)) continue;
     try {
       const recorder = new MediaRecorder(stream, {
@@ -271,7 +289,24 @@ export function useMediaRecorder(
         micStreamRef.current = null;
       }
 
-      const built = createFallbackRecorder(new MediaStream(tracks), bitrate);
+      // Add audio first on WebKit. Safari has shipped versions where a stream
+      // assembled video-first from canvas.captureStream() creates a valid MP4
+      // but never starts the subsequently-added audio input. Track order is not
+      // semantically meaningful, so this is harmless elsewhere and avoids that
+      // silent-file failure mode on iPhone/iPad.
+      const recordingStream = new MediaStream();
+      if (webAudioTrackIsUnreliable()) {
+        for (const track of tracks.filter((t) => t.kind === "audio")) {
+          recordingStream.addTrack(track);
+        }
+        for (const track of tracks.filter((t) => t.kind === "video")) {
+          recordingStream.addTrack(track);
+        }
+      } else {
+        for (const track of tracks) recordingStream.addTrack(track);
+      }
+
+      const built = createFallbackRecorder(recordingStream, bitrate);
       if (!built) {
         stopMic();
         return false;
@@ -363,21 +398,27 @@ export function useMediaRecorder(
       setError("No microphone available — this clip will record silently.");
     }
 
-    // Engine 1: WebCodecs. Everything that can fail is probed inside, before any
-    // frame is captured, so a `null` here costs the user nothing.
+    // Engine 1: WebCodecs. WebKit is intentionally excluded when sound is on:
+    // its only way into AudioEncoder is a WebAudio PCM graph, and real iPhones
+    // can feed that graph digital silence while every API reports success. A
+    // short preflight reduced the failures but did not eliminate them. The
+    // native MediaRecorder path below can consume the original mic track
+    // directly, so it is the reliable choice for an iOS take with sound.
     let started = false;
-    try {
-      const handle = await startMp4Recording(canvas, {
-        fps: TARGET_FPS,
-        bitrate: preset.bitrate,
-        audioTrack: micTrack,
-      });
-      if (handle) {
-        mp4Ref.current = handle;
-        started = true;
+    if (!(audioOn && webAudioTrackIsUnreliable())) {
+      try {
+        const handle = await startMp4Recording(canvas, {
+          fps: TARGET_FPS,
+          bitrate: preset.bitrate,
+          audioTrack: micTrack,
+        });
+        if (handle) {
+          mp4Ref.current = handle;
+          started = true;
+        }
+      } catch {
+        mp4Ref.current = null;
       }
-    } catch {
-      mp4Ref.current = null;
     }
 
     // Engine 2: MediaRecorder.

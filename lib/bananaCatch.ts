@@ -1,8 +1,8 @@
 /**
  * "Banana Catch" — the MonkeyDAO 5th-birthday game.
  *
- * Bananas, confetti and big pixel FIVEs fall through the frame and the player
- * catches the bananas WITH THEIR REAL HANDS: hand positions come from
+ * Pixel bananas fall through the frame and the player catches them WITH THEIR
+ * REAL HANDS: hand positions come from
  * MediaPipe's Hand Landmarker (see components/ar/useHandTracking.ts) and are
  * handed to `update()` each frame in canvas pixel space. Catch one and it
  * pops into confetti and the counter goes up. When the round ends the score
@@ -14,7 +14,7 @@
  *    curves. The previous Banana Rain painted a fat quadratic stroke, which
  *    at small sizes read as a macaroni; blocky pixels read as a banana
  *    instantly and suit the SMB house style.
- *  - They are deliberately LARGE (~22% of the short edge). A target you
+ *  - They are deliberately easy to read (~17% of the short edge). A target you
  *    cannot comfortably put a hand on is not a game, and hand landmarks are
  *    only accurate to a few percent of frame width.
  *  - Difficulty ramps on two axes over the round: fall speed increases, and
@@ -31,7 +31,6 @@ export interface CatchHand {
   /** Catch radius — scaled from the detected hand span. */
   r: number;
 }
-
 export type CatchPhase = "intro" | "playing" | "done";
 
 /** Round length. Long enough to build a score, short enough to re-run. */
@@ -40,7 +39,7 @@ export const ROUND_MS = 30_000;
 const INTRO_MS = 2_000;
 
 interface Faller {
-  kind: "banana" | "golden" | "five" | "confetti";
+  kind: "banana" | "golden";
   x: number;
   y: number;
   vx: number;
@@ -48,9 +47,10 @@ interface Faller {
   size: number;
   rot: number;
   vr: number;
-  /** Set once caught so the pop animation can play out before removal. */
-  popped: number; // 0 = alive, else seconds remaining of the pop
-  color: string;
+  /** Null while catchable; otherwise seconds remaining in the pop. */
+  popped: number | null;
+  /** Continuous overlap required before this counts as a catch. */
+  contactMs: number;
 }
 
 interface Pop {
@@ -66,6 +66,8 @@ interface Pop {
 const TWO_PI = Math.PI * 2;
 const CONFETTI_COLORS = ["#C6F432", "#FEC133", "#FF5A1F", "#4FC3E8", "#F6F1E7"];
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
+/** Reject a one-frame tracking hallucination without making a real catch lag. */
+const CATCH_HOLD_MS = 70;
 
 /**
  * The banana, as a 16x16 pixel-art sprite. Each string is a row; a space is
@@ -102,15 +104,6 @@ const GOLD_PALETTE: Record<string, string> = {
   d: "#B08A18",
   s: "#7A6412",
 };
-
-/** The numeral 5 on a 3x5 grid — the birthday marker, as blocks not text. */
-const FIVE = [
-  [1, 1, 1],
-  [1, 0, 0],
-  [1, 1, 1],
-  [0, 0, 1],
-  [1, 1, 1],
-];
 
 function drawPixelBanana(
   ctx: CanvasRenderingContext2D,
@@ -214,7 +207,7 @@ export class BananaCatchGame {
     // round bananas start arriving from the sides so the frame has to be
     // watched rather than just the top edge.
     const p = this.progress;
-    const interval = 900 - 500 * p; // ms between spawns
+    const interval = 1_150 - 420 * p; // readable density, ~30 targets per round
     this.spawnT += dt;
     if (this.spawnT >= interval) {
       this.spawnT = 0;
@@ -222,12 +215,12 @@ export class BananaCatchGame {
     }
 
     this.stepFallers(dt);
-    this.checkCatches(hands);
+    this.checkCatches(hands, dt);
   }
 
   private spawn(p: number) {
     const short = Math.min(this.w, this.h);
-    const size = short * 0.22;
+    const size = short * 0.17;
     const speed = short * (0.34 + 0.5 * p) * 0.001; // px/ms
     const fromSide = Math.random() < p * 0.45; // never at the start, common later
     const golden = Math.random() < 0.08;
@@ -243,8 +236,8 @@ export class BananaCatchGame {
         size,
         rot: rand(0, TWO_PI),
         vr: rand(-0.0015, 0.0015),
-        popped: 0,
-        color: "",
+        popped: null,
+        contactMs: 0,
       });
     } else {
       this.fallers.push({
@@ -256,38 +249,8 @@ export class BananaCatchGame {
         size,
         rot: rand(0, TWO_PI),
         vr: rand(-0.002, 0.002),
-        popped: 0,
-        color: "",
-      });
-    }
-
-    // Birthday dressing: confetti always, an occasional big 5.
-    for (let i = 0; i < 3; i++) {
-      this.fallers.push({
-        kind: "confetti",
-        x: rand(0, this.w),
-        y: -20,
-        vx: rand(-0.03, 0.03),
-        vy: speed * rand(0.5, 0.9),
-        size: rand(6, 13),
-        rot: rand(0, TWO_PI),
-        vr: rand(-0.006, 0.006),
-        popped: 0,
-        color: CONFETTI_COLORS[(Math.random() * CONFETTI_COLORS.length) | 0],
-      });
-    }
-    if (Math.random() < 0.22) {
-      this.fallers.push({
-        kind: "five",
-        x: rand(short * 0.1, this.w - short * 0.1),
-        y: -short * 0.14,
-        vx: rand(-0.02, 0.02),
-        vy: speed * 0.75,
-        size: short * 0.13,
-        rot: 0,
-        vr: rand(-0.0008, 0.0008),
-        popped: 0,
-        color: "#FEC133",
+        popped: null,
+        contactMs: 0,
       });
     }
   }
@@ -297,7 +260,7 @@ export class BananaCatchGame {
       f.x += f.vx * dt;
       f.y += f.vy * dt;
       f.rot += f.vr * dt;
-      if (f.popped > 0) f.popped = Math.max(0, f.popped - dt / 220);
+      if (f.popped !== null) f.popped = Math.max(0, f.popped - dt / 150);
     }
     // Off-frame, or a caught banana whose pop has finished.
     this.fallers = this.fallers.filter(
@@ -305,7 +268,7 @@ export class BananaCatchGame {
         f.y - f.size < this.h + 40 &&
         f.x > -this.w * 0.4 &&
         f.x < this.w * 1.4 &&
-        !(f.popped > 0 && f.popped <= 0.01)
+        !(f.popped !== null && f.popped <= 0)
     );
     for (const p of this.pops) {
       p.x += p.vx * dt;
@@ -316,25 +279,28 @@ export class BananaCatchGame {
     this.pops = this.pops.filter((p) => p.life > 0);
   }
 
-  private checkCatches(hands: CatchHand[]) {
-    if (!hands.length) return;
+  private checkCatches(hands: CatchHand[], dt: number) {
     for (const f of this.fallers) {
-      if (f.popped > 0) continue;
-      if (f.kind !== "banana" && f.kind !== "golden") continue;
+      if (f.popped !== null) continue;
+      let touching = false;
       for (const hand of hands) {
         const dx = f.x - hand.x;
         const dy = f.y - hand.y;
-        // Generous: the banana's own radius plus the hand's. Landmarks are
-        // only good to a few percent of the frame, and a near miss that
-        // *looks* like a catch feels broken.
-        const reach = f.size * 0.5 + hand.r;
+        const reach = f.size * 0.42 + hand.r;
         if (dx * dx + dy * dy <= reach * reach) {
-          f.popped = 1;
-          this.caught += f.kind === "golden" ? 3 : 1;
-          this.flash = 1;
-          this.burst(f.x, f.y, f.kind === "golden");
+          touching = true;
           break;
         }
+      }
+      // MediaPipe occasionally hallucinates a hand for one frame around a face
+      // or sleeve. Requiring a short continuous overlap makes scoring follow
+      // the gesture the player can actually see.
+      f.contactMs = touching ? f.contactMs + dt : 0;
+      if (f.contactMs >= CATCH_HOLD_MS) {
+        f.popped = 1;
+        this.caught += f.kind === "golden" ? 3 : 1;
+        this.flash = 1;
+        this.burst(f.x, f.y, f.kind === "golden");
       }
     }
   }
@@ -361,24 +327,17 @@ export class BananaCatchGame {
       ctx.save();
       ctx.translate(f.x, f.y);
       ctx.rotate(f.rot);
-      if (f.popped > 0) {
+      if (f.popped !== null) {
         // Caught: brief flare-and-shrink so the catch is unmistakable.
         const k = f.popped;
         ctx.globalAlpha = k;
         ctx.scale(1 + (1 - k) * 0.6, 1 + (1 - k) * 0.6);
       }
-      if (f.kind === "banana" || f.kind === "golden") {
-        if (f.kind === "golden") {
-          ctx.shadowColor = "rgba(255,214,92,0.9)";
-          ctx.shadowBlur = f.size * 0.25;
-        }
-        drawPixelBanana(ctx, f.size, f.kind === "golden");
-      } else if (f.kind === "confetti") {
-        ctx.fillStyle = f.color;
-        ctx.fillRect(-f.size / 2, -f.size / 3, f.size, f.size * 0.66);
-      } else {
-        drawFive(ctx, f.size, f.color);
+      if (f.kind === "golden") {
+        ctx.shadowColor = "rgba(255,214,92,0.9)";
+        ctx.shadowBlur = f.size * 0.25;
       }
+      drawPixelBanana(ctx, f.size, f.kind === "golden");
       ctx.restore();
     }
 
@@ -392,26 +351,4 @@ export class BananaCatchGame {
     }
     ctx.globalAlpha = 1;
   }
-}
-
-/** The birthday 5, as blocks. Never canvas text — see the module docs on
- *  bananaCatch/Banana Rain: text painted here lands in the recording. */
-function drawFive(ctx: CanvasRenderingContext2D, size: number, color: string) {
-  const cell = size / 3;
-  ctx.fillStyle = "rgba(10,11,13,0.5)";
-  ctx.fillRect(-size / 2 - cell * 0.16, -(cell * 5) / 2 - cell * 0.16,
-    size + cell * 0.32, cell * 5 + cell * 0.32);
-  ctx.fillStyle = color;
-  FIVE.forEach((row, ry) => {
-    row.forEach((on, rx) => {
-      if (on) {
-        ctx.fillRect(
-          -size / 2 + rx * cell,
-          -(cell * 5) / 2 + ry * cell,
-          cell + 0.5,
-          cell + 0.5
-        );
-      }
-    });
-  });
 }

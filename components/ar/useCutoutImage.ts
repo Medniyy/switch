@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { removeBackground } from "@/lib/removeBackground";
+import { prepareArtwork } from "@/lib/prepareArtwork";
 
 export interface CutoutResult {
   /** The image to draw: the cutout once ready, or the original as a fallback. */
@@ -45,10 +45,11 @@ export function useCutoutImage(
     setResult({ image: null, settled: false });
     // Defer to idle/next frame so the heavy pixel pass doesn't block the
     // first paint of the recorder.
-    const run = () => {
+    const run = async () => {
       let canvas: HTMLCanvasElement | null = null;
       try {
-        canvas = removeBackground(raw);
+        const prepared = await prepareArtwork(raw, { allowSegmenter: false });
+        canvas = prepared.via === "original" ? null : prepared.canvas;
       } catch {
         canvas = null; // tainted/undecodable — degrade to the original below
       }

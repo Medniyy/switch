@@ -84,6 +84,45 @@ test("a keyable collection still gets the automatic cutout", async ({ page }) =>
   expect(corner!.a).toBe(0);
 });
 
+test("automatic cutout removes tiny detached backdrop artifacts", async ({ page }) => {
+  await page.goto("/");
+  await page.waitForFunction(
+    () => !!(window as unknown as { __switchCutout?: unknown }).__switchCutout
+  );
+  const alpha = await page.evaluate(() => {
+    const c = document.createElement("canvas");
+    c.width = 300;
+    c.height = 300;
+    const x = c.getContext("2d")!;
+    x.fillStyle = "#183c91";
+    x.fillRect(0, 0, 300, 300);
+    x.fillStyle = "#ec3750";
+    x.fillRect(90, 80, 120, 150); // real central subject
+    x.fillRect(20, 20, 3, 3); // detached color fleck, not a second subject
+    const cut = (
+      window as unknown as {
+        __switchCutout: {
+          removeBackground: (
+            source: HTMLCanvasElement,
+            options: { crop: boolean }
+          ) => HTMLCanvasElement | null;
+        };
+      }
+    ).__switchCutout.removeBackground(c, { crop: false });
+    if (!cut) return null;
+    const data = cut.getContext("2d")!.getImageData(0, 0, 300, 300).data;
+    return {
+      subject: data[(150 * 300 + 150) * 4 + 3],
+      fleck: data[(21 * 300 + 21) * 4 + 3],
+      background: data[(10 * 300 + 150) * 4 + 3],
+    };
+  });
+  expect(alpha).not.toBeNull();
+  expect(alpha!.subject).toBeGreaterThan(240);
+  expect(alpha!.fleck).toBe(0);
+  expect(alpha!.background).toBe(0);
+});
+
 test("sensei is keyed automatically like every other collection", async ({ page }) => {
   // Sensei used to be opted OUT of the cutout (autoCutout: false) because the
   // old colour-distance key could not separate a black-robed panda from a

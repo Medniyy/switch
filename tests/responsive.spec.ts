@@ -264,6 +264,13 @@ test.describe("uploaded photo uses saved mask", () => {
     await expect
       .poll(async () => (await monke.getAttribute("src")) ?? "", { timeout: 15_000 })
       .toMatch(/^blob:/);
+
+    // Phone users get the same precise controls as desktop; pinch is a
+    // shortcut, not the only way to resize or position artwork.
+    await page.getByRole("button", { name: "ADJUST" }).click();
+    for (const label of ["Size", "Left / right", "Up / down", "Rotation"]) {
+      await expect(page.getByRole("slider", { name: label })).toBeVisible();
+    }
   });
 });
 

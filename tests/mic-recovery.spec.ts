@@ -12,15 +12,32 @@ async function openLiveStage(page: Page) {
   await keepWhole.click();
 }
 
-test("the mic button recovers a temporary capture failure", async ({ page }) => {
+test("the mic button requests audio only and keeps the camera session", async ({
+  page,
+}) => {
   await page.addInitScript(() => {
     const realGetUserMedia = navigator.mediaDevices.getUserMedia.bind(
       navigator.mediaDevices
     );
-    let failedCombinedCalls = 0;
+    const calls: Array<{ audio: boolean; video: boolean }> = [];
+    (
+      window as unknown as {
+        __micCalls: Array<{ audio: boolean; video: boolean }>;
+      }
+    ).__micCalls = calls;
+    let preferredAudioFailed = false;
     navigator.mediaDevices.getUserMedia = async (constraints) => {
-      if (constraints.audio && constraints.video && failedCombinedCalls < 2) {
-        failedCombinedCalls += 1;
+      calls.push({
+        audio: !!constraints?.audio,
+        video: !!constraints?.video,
+      });
+      if (
+        constraints?.audio &&
+        !constraints.video &&
+        typeof constraints.audio === "object" &&
+        !preferredAudioFailed
+      ) {
+        preferredAudioFailed = true;
         throw new DOMException("Temporary capture failure", "AbortError");
       }
       return realGetUserMedia(constraints);
@@ -29,18 +46,27 @@ test("the mic button recovers a temporary capture failure", async ({ page }) => 
 
   await openLiveStage(page);
 
-  const retryMic = page.getByRole("button", { name: "RETRY MIC" });
-  await expect(retryMic).toBeVisible();
-  await expect(page.getByText("TAP TO RETRY MIC")).toBeVisible();
-  await expect(page.getByText(/MIC BLOCKED .* RECORDS SILENT/)).toHaveCount(0);
-
-  await retryMic.click();
+  const connectMic = page.getByRole("button", { name: "CONNECT MIC" });
+  await expect(connectMic).toBeVisible();
+  await connectMic.click();
 
   await expect(page.getByRole("button", { name: "MIC ON" })).toBeVisible();
-  await expect(page.getByText("TAP TO RETRY MIC")).toHaveCount(0);
+  const calls = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __micCalls: Array<{ audio: boolean; video: boolean }>;
+        }
+      ).__micCalls
+  );
+  expect(calls.filter((call) => call.video).length).toBe(1);
+  expect(calls.filter((call) => call.audio).length).toBe(2);
+  expect(calls.filter((call) => call.audio).every((call) => !call.video)).toBe(
+    true
+  );
 });
 
-test("permission is only called blocked after a direct mic-button refusal", async ({
+test("an ambiguous WebKit refusal is not falsely called blocked", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -48,7 +74,7 @@ test("permission is only called blocked after a direct mic-button refusal", asyn
       navigator.mediaDevices
     );
     navigator.mediaDevices.getUserMedia = async (constraints) => {
-      if (constraints.audio && constraints.video) {
+      if (constraints?.audio && !constraints.video) {
         throw new DOMException("Permission denied", "NotAllowedError");
       }
       return realGetUserMedia(constraints);
@@ -57,11 +83,44 @@ test("permission is only called blocked after a direct mic-button refusal", asyn
 
   await openLiveStage(page);
 
-  const allowMic = page.getByRole("button", { name: "ALLOW MIC" });
-  await expect(allowMic).toBeVisible();
-  await expect(page.getByText("TAP TO CONNECT MIC")).toBeVisible();
+  const connectMic = page.getByRole("button", { name: "CONNECT MIC" });
+  await expect(connectMic).toBeVisible();
+  await connectMic.click();
 
-  await allowMic.click();
+  await expect(page.getByRole("button", { name: "ALLOW MIC" })).toBeVisible();
+  await expect(page.getByText("TAP TO CONNECT MIC")).toBeVisible();
+  await expect(page.getByText("ALLOW MIC IN BROWSER SETTINGS")).toHaveCount(0);
+});
+
+test("a confirmed site-level denial is called blocked", async ({ page }) => {
+  await page.addInitScript(() => {
+    const realGetUserMedia = navigator.mediaDevices.getUserMedia.bind(
+      navigator.mediaDevices
+    );
+    navigator.mediaDevices.getUserMedia = async (constraints) => {
+      if (constraints?.audio && !constraints.video) {
+        throw new DOMException("Permission denied", "NotAllowedError");
+      }
+      return realGetUserMedia(constraints);
+    };
+    const realQuery = navigator.permissions.query.bind(navigator.permissions);
+    navigator.permissions.query = async (descriptor) => {
+      if (descriptor.name === ("microphone" as PermissionName)) {
+        return {
+          name: "microphone",
+          state: "denied",
+          onchange: null,
+          addEventListener() {},
+          removeEventListener() {},
+          dispatchEvent: () => true,
+        } as PermissionStatus;
+      }
+      return realQuery(descriptor);
+    };
+  });
+
+  await openLiveStage(page);
+  await page.getByRole("button", { name: "CONNECT MIC" }).click();
 
   await expect(
     page.getByRole("button", {
@@ -79,7 +138,7 @@ test("an iOS audio-session reset offers recovery instead of blaming permission",
       navigator.mediaDevices
     );
     navigator.mediaDevices.getUserMedia = async (constraints) => {
-      if (constraints.audio && constraints.video) {
+      if (constraints?.audio && !constraints.video) {
         throw new DOMException(
           "No AVAudioSessionCaptureDevice",
           "NotAllowedError"
@@ -90,6 +149,8 @@ test("an iOS audio-session reset offers recovery instead of blaming permission",
   });
 
   await openLiveStage(page);
+
+  await page.getByRole("button", { name: "CONNECT MIC" }).click();
 
   await expect(
     page.getByRole("button", { name: "RELOAD TO RESTORE MIC" })

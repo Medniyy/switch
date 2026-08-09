@@ -13,8 +13,8 @@
  *  channelCount is mono: phone mics are single-capsule, so asking for stereo
  *  lands the signal in one channel only and plays back ~6 dB quieter.
  *
- *  Shared by useCameraStream (which now acquires the mic up-front, together with
- *  the camera, so iOS Chrome actually prompts for it) and useMediaRecorder. */
+ *  Shared by useCameraStream (which requests audio directly from the on-screen
+ *  mic tap on iOS) and useMediaRecorder. */
 export const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   echoCancellation: false,
   noiseSuppression: false,

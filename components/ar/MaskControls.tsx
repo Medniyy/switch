@@ -104,8 +104,8 @@ export function MaskQuickToggles({
   const setAudioEnabled = useAppStore((s) => s.setAudioEnabled);
 
   // When the OS blocked the mic, the toggle can't enable audio — reflect the
-  // real state (off) so it doesn't falsely read "MIC ON". The banner handles
-  // re-requesting permission.
+  // real state (off) so it doesn't falsely read "MIC ON". This same on-screen
+  // button owns the permission request and recovery UI.
   const micOn = audioEnabled && micStatus === "granted";
   const micBusy = micStatus === "requesting";
   const micLabel = microphoneLabel(micStatus, micOn);

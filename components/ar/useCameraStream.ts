@@ -59,13 +59,28 @@ function needsFreshWebKitSession(error: unknown): boolean {
   );
 }
 
-function audioFailureStatus(
-  error: unknown,
-  userInitiated: boolean
-): AudioStatus {
+async function microphonePermissionState(): Promise<PermissionState | null> {
+  try {
+    if (!navigator.permissions?.query) return null;
+    const result = await navigator.permissions.query({
+      name: "microphone" as PermissionName,
+    });
+    return result.state;
+  } catch {
+    // Older iOS releases expose Permissions but not the microphone descriptor.
+    return null;
+  }
+}
+
+async function audioFailureStatus(error: unknown): Promise<AudioStatus> {
   if (needsFreshWebKitSession(error)) return "restart-required";
   if (permissionWasRefused(error)) {
-    return userInitiated ? "blocked" : "needs-permission";
+    // NotAllowedError alone does not prove a denial on WebKit. It is also used
+    // for temporary media-session failures. Only show "blocked" when the
+    // browser can positively tell us the site permission is denied.
+    return (await microphonePermissionState()) === "denied"
+      ? "blocked"
+      : "needs-permission";
   }
   return "error";
 }
@@ -85,10 +100,10 @@ function cameraConstraints(facing: "user" | "environment") {
  * declaring the microphone blocked. Permission refusals are never retried
  * automatically because that can produce duplicate prompts.
  */
-async function getCameraAndMic(video: MediaTrackConstraints) {
+async function getMicrophone() {
   try {
     return await navigator.mediaDevices.getUserMedia({
-      video,
+      video: false,
       audio: captureAudioConstraints(),
     });
   } catch (error) {
@@ -99,15 +114,15 @@ async function getCameraAndMic(video: MediaTrackConstraints) {
     ) {
       throw error;
     }
-    return navigator.mediaDevices.getUserMedia({ video, audio: true });
+    return navigator.mediaDevices.getUserMedia({ video: false, audio: true });
   }
 }
 
 /**
  * Owns the live camera/microphone stream and exposes explicit recovery for the
- * on-screen mic control. Camera and mic are requested together initially so
- * iOS browsers reliably show both permissions. If audio fails but video works,
- * the real failure type is preserved instead of labelling every case "blocked".
+ * on-screen mic control. Camera starts by itself. Microphone access is requested
+ * only by the mic button, keeping iOS's permission request directly inside the
+ * user's tap and avoiding a second competing camera capture session.
  *
  * `active` releases capture while a result or editor is on screen. This returns
  * mobile playback to the speaker route and avoids Android volume ducking.
@@ -181,23 +196,9 @@ export function useCameraStream(
 
     const video = cameraConstraints(facing);
     setStatus("requesting");
-    setAudioStatus("requesting");
+    setAudioStatus("off");
 
     void (async () => {
-      let audioError: unknown = null;
-      try {
-        const stream = await getCameraAndMic(video);
-        if (cancelled || operation !== operationRef.current) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-        bind(stream);
-        setAudioStatus(stream.getAudioTracks().length ? "granted" : "error");
-        return;
-      } catch (error) {
-        audioError = error;
-      }
-
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video,
@@ -208,7 +209,6 @@ export function useCameraStream(
           return;
         }
         bind(stream);
-        setAudioStatus(audioFailureStatus(audioError, false));
       } catch (error) {
         if (cancelled || operation !== operationRef.current) return;
         setAudioStatus("off");
@@ -226,8 +226,9 @@ export function useCameraStream(
 
   /**
    * Called directly by the mic button. The getUserMedia request begins inside
-   * that tap, and camera + mic are reacquired together because deferred
-   * audio-only requests are unreliable in iOS WebViews.
+   * that tap. It requests audio only and adds the resulting track to the
+   * already-running camera stream, so WebKit does not have to tear down and
+   * reacquire a camera permission/session just to prompt for the microphone.
    */
   const requestMicrophone = useCallback(async () => {
     if (!active || audioStatus === "requesting") return;
@@ -241,46 +242,36 @@ export function useCameraStream(
     }
 
     const operation = ++operationRef.current;
-    const video = cameraConstraints(facing);
     setAudioStatus("requesting");
 
-    // iOS may refuse a second camera stream while the first remains live.
-    // Release it synchronously inside the tap, then request both devices again.
-    stopCurrentStream();
-
-    let audioError: unknown = null;
     try {
-      const stream = await getCameraAndMic(video);
+      const microphoneStream = await getMicrophone();
       if (operation !== operationRef.current || !active) {
-        stream.getTracks().forEach((track) => track.stop());
+        microphoneStream.getTracks().forEach((track) => track.stop());
         return;
       }
+      const audioTrack = microphoneStream.getAudioTracks()[0] ?? null;
+      const cameraStream = streamRef.current;
+      if (!audioTrack || !cameraStream) {
+        microphoneStream.getTracks().forEach((track) => track.stop());
+        setAudioStatus("error");
+        return;
+      }
+
+      // Replace any stale audio input while preserving the live video track.
+      for (const previous of cameraStream.getAudioTracks()) {
+        cameraStream.removeTrack(previous);
+        previous.stop();
+      }
+      cameraStream.addTrack(audioTrack);
       useAppStore.getState().setAudioEnabled(true);
-      bind(stream);
-      setAudioStatus(stream.getAudioTracks().length ? "granted" : "error");
-      return;
-    } catch (error) {
-      audioError = error;
-    }
-
-    // Keep the camera usable even if the microphone still cannot recover.
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video,
-        audio: false,
-      });
-      if (operation !== operationRef.current || !active) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-      bind(stream);
-      setAudioStatus(audioFailureStatus(audioError, true));
+      bind(cameraStream);
+      setAudioStatus("granted");
     } catch (error) {
       if (operation !== operationRef.current) return;
-      setAudioStatus("off");
-      setStatus(permissionWasRefused(error) ? "denied" : "error");
+      setAudioStatus(await audioFailureStatus(error));
     }
-  }, [active, audioStatus, bind, facing, stopCurrentStream]);
+  }, [active, audioStatus, bind]);
 
   const audioEnabled = useAppStore((state) => state.audioEnabled);
   useEffect(() => {

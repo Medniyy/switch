@@ -36,6 +36,12 @@ async function liveVideoStage(page: Page) {
   const keepWhole = page.getByRole("button", { name: /keep it whole/i });
   await keepWhole.waitFor({ state: "visible", timeout: 30_000 });
   await keepWhole.click();
+  // Microphone permission is intentionally user-triggered on iOS. The camera
+  // starts alone; the on-screen mic button owns the audio request.
+  const connectMic = page.getByRole("button", { name: "CONNECT MIC" });
+  await expect(connectMic).toBeVisible();
+  await connectMic.click();
+  await expect(page.getByRole("button", { name: "MIC ON" })).toBeVisible();
 }
 
 async function setScript(page: Page, script: string) {
@@ -252,7 +258,7 @@ test("the WebKit raw-mic path still records audio", async ({ page }) => {
       navigator.mediaDevices
     );
     navigator.mediaDevices.getUserMedia = async (constraints) => {
-      if (constraints.audio) {
+      if (constraints?.audio) {
         (
           window as unknown as {
             __lastAudioConstraints?: MediaTrackConstraints | boolean;

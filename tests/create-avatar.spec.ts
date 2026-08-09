@@ -96,6 +96,40 @@ test("custom images can be dropped or pasted from the clipboard", async ({
   await expect(page.getByRole("button", { name: "USE AVATAR" })).toBeVisible({
     timeout: 60_000,
   });
+  // Portrait models correctly reject this geometric illustration. The edge
+  // matte then becomes the primary result and must not be filtered out of the
+  // preview, leaving the user with only the untouched cyan background.
+  await expect(
+    page.getByRole("button", { name: "CUTOUT", exact: true })
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "KEEP ORIGINAL", exact: true })
+  ).toBeVisible();
+  const previewEdgeAlpha = await page.evaluate(() => {
+    const canvas = (
+      window as unknown as {
+        __switchAvatarPreview?: {
+          getChoiceCanvas: () => HTMLCanvasElement;
+          getChoiceVia: () => string;
+        };
+      }
+    ).__switchAvatarPreview?.getChoiceCanvas();
+    if (!canvas) return -1;
+    return canvas
+      .getContext("2d")!
+      .getImageData(0, Math.round(canvas.height * 0.5), 1, 1)
+      .data[3];
+  });
+  const previewEngine = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __switchAvatarPreview?: { getChoiceVia: () => string };
+        }
+      ).__switchAvatarPreview?.getChoiceVia()
+  );
+  expect(previewEngine).toBe("matte");
+  expect(previewEdgeAlpha).toBeLessThan(32);
 
   await page.getByRole("button", { name: "Pick another image" }).click();
   await expect(

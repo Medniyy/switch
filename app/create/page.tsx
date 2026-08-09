@@ -231,7 +231,11 @@ export default function CreatePage() {
         // on portraits/complex art, while the full editor is a useful recovery
         // path when the smart cutout needs adjustment.
         const source = squareCanvas(img);
-        const prepared = await prepareArtwork(source, {
+        // Process the original aspect ratio. Letterboxing first creates a
+        // transparent border around landscape/portrait art, which disconnects
+        // a flat coloured backdrop from the real border and prevents the edge
+        // matte from discovering it. Only the untouched fallback is squared.
+        const prepared = await prepareArtwork(img, {
           preferSegmenter: true,
           onSegmenterProgress: (progress) => {
             if (progress.kind === "downloading") {
@@ -250,14 +254,25 @@ export default function CreatePage() {
           },
         });
         const artwork = await exportTransparentCanvas(source);
-        const options = [
+        const candidates = [
           {
-            canvas: prepared.canvas,
+            canvas: prepared.via === "original" ? source : prepared.canvas,
             via: prepared.via,
             coverage: prepared.coverage,
           },
-          ...prepared.alternatives,
-        ].filter((candidate) => candidate.via !== "matte");
+          ...prepared.alternatives.map((candidate) =>
+            candidate.via === "original"
+              ? { ...candidate, canvas: source }
+              : candidate
+          ),
+        ];
+        // A secondary edge matte is noisy on real photos, so keep it out of
+        // the chooser when the portrait engine already won. If the edge matte
+        // itself is the selected primary, though, it is the only successful
+        // automatic result and must never be filtered out (common for PFP art).
+        const options = candidates.filter(
+          (candidate, index) => index === 0 || candidate.via !== "matte"
+        );
         setStage({
           kind: "preview",
           id: Date.now(),
@@ -695,9 +710,15 @@ function PreviewStage({
     if (process.env.NODE_ENV === "production" || !choice) return;
     (
       window as unknown as {
-        __switchAvatarPreview?: { getChoiceCanvas: () => HTMLCanvasElement };
+        __switchAvatarPreview?: {
+          getChoiceCanvas: () => HTMLCanvasElement;
+          getChoiceVia: () => PrepareVia;
+        };
       }
-    ).__switchAvatarPreview = { getChoiceCanvas: () => choice.canvas };
+    ).__switchAvatarPreview = {
+      getChoiceCanvas: () => choice.canvas,
+      getChoiceVia: () => choice.via,
+    };
     return () => {
       delete (
         window as unknown as { __switchAvatarPreview?: unknown }
@@ -735,8 +756,8 @@ function PreviewStage({
         <canvas ref={viewRef} className="h-full w-full" />
       </div>
 
-      {/* Smart cutout or original only. The weak edge engine was removed; the
-          full editor is the recovery path when the result needs adjustment. */}
+      {/* Show the winning cutout and the untouched source. A secondary edge
+          attempt stays hidden, but it remains visible when it is the winner. */}
       {options.length > 1 && (
         <div className="flex flex-col gap-2">
           <p className="text-center text-sm text-cream/55">

@@ -43,6 +43,9 @@ yarn-error.log*
 
 # generated MediaPipe model (re-created by `npm run setup:mediapipe` / prebuild)
 /public/mediapipe/
+# Generated browser-inference runtime/model (re-created by prebuild).
+/public/ort/
+/public/models/*.onnx
 
 # generated collection data + marketplace covers — the scraped token indexes are
 # rebuilt locally by `npm run data:*` and deployed with the build; they are NOT

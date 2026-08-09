@@ -5,8 +5,8 @@ a high-quality client-side solution", "don't patch collection by collection").
 
 ## What it is now
 
-Nothing is uploaded anywhere. Two stages run on-device; the subject model is
-bundled with the app and loaded lazily:
+Nothing is uploaded anywhere. The engines run on-device and their models are
+self-hosted and loaded lazily:
 
 1. **Seeds** (`lib/removeBackground.ts`) — count the whole border ring, take
    the dominant colour cluster plus any shade that chains onto it, plus any
@@ -17,10 +17,12 @@ bundled with the app and loaded lazily:
    bottleneck path cost), where a "step" is *relative* contrast, not a raw
    channel delta.
 
-`lib/prepareArtwork.ts` is the single entry point. Collection art and custom
-uploads both call it: selfie segmenter (250KB, Apache-2.0, lazy) → matte →
-untouched original. If the preferred result keeps an implausible amount of the
-frame, a plausible fallback is promoted automatically.
+`lib/prepareArtwork.ts` is the single entry point. Custom uploads use
+quantized MODNet (6.6MB, Apache-2.0, lazy) for a detailed portrait alpha matte,
+then MediaPipe selfie segmentation (250KB, Apache-2.0) as a compatibility
+fallback. The deterministic edge matte and untouched original remain recovery
+choices. If the preferred result keeps an implausible amount of the frame, a
+plausible fallback is promoted automatically.
 
 ## Why this shape
 
@@ -64,7 +66,8 @@ Evaluated against the brief's licence constraints:
 | `@imgly/background-removal` | **AGPL-3.0** | Licence decision for the whole app, not a library choice. Not adopted. |
 | BRIA RMBG-1.4 | **non-commercial** | Ruled out, as flagged. |
 | DeepLabV3 (MediaPipe) | Apache-2.0 | **Measured on our art: bailed 4/6, swiss-cheese mattes.** Trained on photographs; a stylised character is out of distribution. Rejected on quality, not licence. |
-| Selfie segmenter (MediaPipe) | Apache-2.0 | **Shipped** as the default subject-aware pass for uploads and collection art; the matte remains the fallback. |
+| Selfie segmenter (MediaPipe) | Apache-2.0 | **Shipped** as the lightweight compatibility fallback. |
+| **MODNet via onnxruntime-web** | Apache-2.0 (model), MIT (runtime) | **Shipped for portrait uploads.** Quantized 6.6MB model, cached after first use, with detailed soft alpha around hair and edges. |
 | **U²-Netp via onnxruntime-web** | Apache-2.0 (model), MIT (runtime) | **The recommended next POC.** Salient-object detection generalises to illustration far better than semantic segmentation. ~4.7MB model + ORT wasm. |
 
 Cost of that path: a real dependency and a multi-MB lazy download for two
@@ -105,7 +108,9 @@ understands subjects generally (U²-Netp, above).
 - **Automatic by default**, with a visible **Remove background** button (and
   **Bring back full artwork**) in the mask editor on desktop *and* mobile,
   with undo.
-- **No main-thread inference for the matte** is still open: it is 10–700ms of
-  synchronous JS during preparation. Moving it into a Worker is the obvious
-  next optimisation and matters most on low-end Android.
-- **Untested on real mobile hardware.** Every number here is desktop Chrome.
+- **Responsive inference.** ONNX Runtime uses its proxy worker with universal
+  SIMD/WASM and one thread, avoiding cross-origin-isolation requirements on
+  GitHub Pages. The existing MediaPipe CPU path is the fallback.
+- **Mobile-safe architecture, not a hardware guarantee.** The WASM path is
+  supported by iOS WebKit and Android Chromium, but real-device performance
+  and memory use still need testing across the oldest phones we support.

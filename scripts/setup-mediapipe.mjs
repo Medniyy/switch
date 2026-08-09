@@ -3,12 +3,22 @@
  * /public so the app is fully self-hosted (no third-party CDN at runtime).
  *
  * - copies the WASM fileset from the installed @mediapipe/tasks-vision package
- * - downloads the Face Landmarker model (.task)
+ * - downloads the tracking/segmentation models and the portrait matte model
+ * - copies the minimal ONNX Runtime Web WASM fileset
  *
  * Runs automatically via the "prebuild" / "postinstall" npm scripts, but you
  * can run it manually: node scripts/setup-mediapipe.mjs
  */
-import { cp, mkdir, readdir, rm, writeFile, access } from "node:fs/promises";
+import {
+  access,
+  cp,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 const ROOT = process.cwd();
@@ -16,13 +26,16 @@ const SRC_WASM = join(ROOT, "node_modules", "@mediapipe", "tasks-vision", "wasm"
 const OUT_DIR = join(ROOT, "public", "mediapipe");
 const OUT_WASM = join(OUT_DIR, "wasm");
 const MODEL_PATH = join(OUT_DIR, "face_landmarker.task");
+const SRC_ORT = join(ROOT, "node_modules", "onnxruntime-web", "dist");
+const OUT_ORT = join(ROOT, "public", "ort");
+const MODNET_DIR = join(ROOT, "public", "models");
+const MODNET_PATH = join(MODNET_DIR, "modnet-portrait-q8.onnx");
 
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 
-// Selfie segmenter (250KB) — powers the "create your own avatar" photo
-// cutout (lib/aiCutout.ts). Fetched lazily by the browser only when that
-// flow is used; vendored here so runtime stays CDN-free like everything else.
+// Selfie segmenter (250KB) — the resilient fallback for older or
+// memory-constrained devices when the higher-quality MODNet path cannot run.
 const SELFIE_PATH = join(OUT_DIR, "selfie_segmenter.tflite");
 const SELFIE_URL =
   "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/selfie_segmenter.tflite";
@@ -33,6 +46,13 @@ const SELFIE_URL =
 const HANDS_PATH = join(OUT_DIR, "hand_landmarker.task");
 const HANDS_URL =
   "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+
+// Quantized MODNet portrait matte. Apache-2.0 weights converted to ONNX by
+// Xenova for browser inference. The hash pins the exact reviewed artifact.
+const MODNET_URL =
+  "https://huggingface.co/Xenova/modnet/resolve/main/onnx/model_quantized.onnx?download=true";
+const MODNET_SHA256 =
+  "92e49898c3e05a6d7a944fc67a8cb87c4aad754ffb6ebd949528c7d1105fee3a";
 
 async function exists(p) {
   try {
@@ -96,6 +116,22 @@ async function main() {
     console.warn("WASM source not found (is @mediapipe/tasks-vision installed?)");
   }
 
+  // ONNX Runtime's universal SIMD/WASM path works in both iOS WebKit and
+  // Android Chromium. Only the two files this build requests are published;
+  // copying every execution provider would add ~75MB of unused assets.
+  if (await exists(SRC_ORT)) {
+    await mkdir(OUT_ORT, { recursive: true });
+    for (const file of [
+      "ort-wasm-simd-threaded.mjs",
+      "ort-wasm-simd-threaded.wasm",
+    ]) {
+      await cp(join(SRC_ORT, file), join(OUT_ORT, file));
+    }
+    console.log("Copied ONNX Runtime WASM -> public/ort");
+  } else {
+    console.warn("ONNX Runtime assets not found (is onnxruntime-web installed?)");
+  }
+
   // 2. Download models (skip any already present)
   for (const { path, url, label } of [
     { path: MODEL_PATH, url: MODEL_URL, label: "Face Landmarker" },
@@ -113,6 +149,26 @@ async function main() {
     await writeFile(path, buf);
     console.log(`Saved ${label} (${(buf.length / 1e6).toFixed(1)} MB) -> ${path}`);
   }
+
+  // The high-quality portrait model is larger than the tracking models, so it
+  // stays generated rather than bloating source history. Always verify both a
+  // fresh download and an existing file; a truncated model must fail at build
+  // time, not strand a user on the processing screen.
+  await mkdir(MODNET_DIR, { recursive: true });
+  if (!(await exists(MODNET_PATH))) {
+    console.log("Downloading MODNet portrait model...");
+    const res = await fetch(MODNET_URL);
+    if (!res.ok) throw new Error(`MODNet download failed: HTTP ${res.status}`);
+    await writeFile(MODNET_PATH, Buffer.from(await res.arrayBuffer()));
+  }
+  const modnet = await readFile(MODNET_PATH);
+  const hash = createHash("sha256").update(modnet).digest("hex");
+  if (hash !== MODNET_SHA256) {
+    throw new Error(`MODNet checksum mismatch: ${hash}`);
+  }
+  console.log(
+    `MODNet portrait model ready (${(modnet.length / 1e6).toFixed(1)} MB).`
+  );
 }
 
 main().catch((err) => {

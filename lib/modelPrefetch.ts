@@ -66,6 +66,15 @@ export async function prefetchModel(
   url: string,
   onProgress?: (p: PrefetchProgress) => void
 ): Promise<void> {
+  await fetchModelBytes(url, onProgress);
+}
+
+/** Return the cached/downloaded bytes so an inference runtime does not fetch
+ * the same model a second time after the progress UI has completed. */
+export async function fetchModelBytes(
+  url: string,
+  onProgress?: (p: PrefetchProgress) => void
+): Promise<Uint8Array> {
   const cache = await openCache();
 
   if (cache) {
@@ -73,7 +82,7 @@ export async function prefetchModel(
       const hit = await cache.match(url);
       if (hit) {
         onProgress?.({ ratio: 1, loaded: 0, total: null, cached: true });
-        return;
+        return new Uint8Array(await hit.arrayBuffer());
       }
     } catch {
       /* unreadable cache — just download */
@@ -82,10 +91,7 @@ export async function prefetchModel(
 
   const res = await fetch(url);
   if (!res.ok || !res.body) {
-    // Let the real loader deal with it; reporting "done" keeps the UI moving
-    // rather than parking on a bar that will never fill.
-    onProgress?.({ ratio: 1, loaded: 0, total: null, cached: false });
-    return;
+    throw new Error(`Model download failed: HTTP ${res.status}`);
   }
 
   const header = res.headers.get("content-length");
@@ -108,13 +114,20 @@ export async function prefetchModel(
     });
   }
 
+  const bytes = new Uint8Array(loaded);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
   if (cache) {
     try {
-      const body = new Blob(chunks as BlobPart[]);
-      await cache.put(url, new Response(body, { headers: res.headers }));
+      await cache.put(url, new Response(bytes.slice(), { headers: res.headers }));
     } catch {
       /* over quota or blocked — the download still warmed the HTTP cache */
     }
   }
   onProgress?.({ ratio: 1, loaded, total, cached: false });
+  return bytes;
 }

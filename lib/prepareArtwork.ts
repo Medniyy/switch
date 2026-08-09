@@ -11,7 +11,7 @@
  * the alternatives to the UI and let the person looking at the picture
  * decide. A bad cutout becomes one tap to fix rather than a dead end.
  *
- * Two engines, on-device, nothing uploaded:
+ * Engines run on-device; nothing is uploaded:
  *
  *  - "matte" — the geometric cutout (lib/subjectMatte.ts). No model, no
  *    download, tens of milliseconds. It knows about EDGES, not subjects: it
@@ -20,9 +20,9 @@
  *    construction. Its failure modes both come from that same blind spot —
  *    a soft or low-contrast outline lets it walk into the character, and a
  *    backdrop that is a SCENE has no single answer for it to find.
- *  - "segmenter" — MediaPipe's selfie segmenter (250KB, Apache-2.0, fetched
- *    lazily). This one genuinely knows what a PERSON is, which is exactly
- *    the knowledge the matte lacks, so it is the right tool for a photo.
+ *  - "segmenter" — MODNet portrait matting (6.6MB quantized, Apache-2.0,
+ *    lazy), with MediaPipe's selfie segmenter as a 250KB fallback. This path
+ *    knows what a PERSON is, which is the knowledge the matte lacks.
  *
  * Which goes first is decided by the CALLER, because it depends on what the
  * image is, and the caller is the only one who knows. `preferSegmenter` is
@@ -38,12 +38,12 @@
  *     Claynosaurz/Bullpen art: it bailed on 4 of 6 and returned swiss-cheese
  *     mattes on the rest. Trained on photographs; stylised characters are out
  *     of its distribution.
- *   - U²-Netp via onnxruntime-web (Apache-2.0 + MIT) is the researched next
- *     step for "knows what a subject is, on ARBITRARY art" — see
- *     BACKGROUND-REMOVAL.md.
+ *   - MODNet is shipped only for portraits; arbitrary stylised scenes still
+ *     need a separately evaluated salient-object model.
  */
 import { removeBackground } from "./removeBackground";
 import { photoCutout } from "./aiCutout";
+import type { PortraitCutoutProgress } from "./modnetCutout";
 
 export type PrepareVia = "matte" | "segmenter" | "original";
 
@@ -102,6 +102,8 @@ export interface PrepareOptions {
   preferSegmenter?: boolean;
   /** Crop to the subject once its background is gone. */
   crop?: boolean;
+  /** Honest progress from the on-device portrait engine. */
+  onSegmenterProgress?: (progress: PortraitCutoutProgress) => void;
 }
 
 /** Keeping almost everything, or almost nothing, is rarely a real cutout. */
@@ -114,6 +116,7 @@ export async function prepareArtwork(
     allowSegmenter = true,
     preferSegmenter = false,
     crop = true,
+    onSegmenterProgress,
   }: PrepareOptions = {}
 ): Promise<PreparedArtwork> {
   const matte = await runMatte(source, crop);
@@ -122,7 +125,9 @@ export async function prepareArtwork(
   // what hid the good result on photographs.
   const wantSegmenter =
     allowSegmenter && (preferSegmenter || !matte || isSuspect(matte));
-  const segmented = wantSegmenter ? await runSegmenter(source) : null;
+  const segmented = wantSegmenter
+    ? await runSegmenter(source, onSegmenterProgress)
+    : null;
 
   const preferred: PreparedCandidate[] = preferSegmenter
     ? [segmented, matte].filter(Boolean as unknown as (c: PreparedCandidate | null) => c is PreparedCandidate)
@@ -181,10 +186,11 @@ async function runMatte(
 }
 
 async function runSegmenter(
-  source: HTMLImageElement | HTMLCanvasElement
+  source: HTMLImageElement | HTMLCanvasElement,
+  onProgress?: (progress: PortraitCutoutProgress) => void
 ): Promise<PreparedCandidate | null> {
   try {
-    const cut = await photoCutout(source);
+    const cut = await photoCutout(source, { onProgress });
     if (!cut) return null;
     return { canvas: cut.canvas, via: "segmenter", coverage: cut.coverage };
   } catch {

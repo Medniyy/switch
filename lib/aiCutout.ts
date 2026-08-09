@@ -1,11 +1,10 @@
 /**
  * On-device photo background removal, for the "create your own avatar" flow.
  *
- * Runs MediaPipe's selfie segmenter — a 250KB model, genuinely nano — over a
- * photo the user uploads, on their device, reusing the WASM runtime the app
- * already self-hosts for face tracking. Nothing is uploaded anywhere; the
- * model file itself is fetched lazily on first use, so the record path and
- * initial page load pay nothing.
+ * Runs quantized MODNet for a detailed portrait matte and keeps MediaPipe's
+ * 250KB selfie segmenter as a compatibility fallback. Both execute in the
+ * browser; nothing is uploaded. Model files are fetched lazily, so the record
+ * path and initial page load pay nothing.
  *
  * Scope, learned the measured way (2026-08-07): this is for PHOTOGRAPHS OF
  * PEOPLE, the model's training domain. The obvious-seeming extension —
@@ -13,16 +12,19 @@
  * prototyped with DeepLabV3 (2.8MB) and evaluated on real Sensei, SMB,
  * Claynosaurz and Bullpen tokens: it bailed on 4/6 and produced swiss-cheese
  * mattes (the character's face classified as background) on the rest. Do not
- * re-add that path without a model actually trained on stylised art — ISNet
- * or U²-Netp via onnxruntime-web is the researched next candidate, at a
- * ~15MB runtime+model cost. The chroma-key (lib/removeBackground.ts) remains
- * the tool for flat-backdrop art.
+ * re-add that path without a model actually trained on stylised art. MODNet
+ * is deliberately scoped to portrait uploads; the geometric matte
+ * (lib/removeBackground.ts) remains the tool for flat-backdrop art.
  *
  * Callers must treat null as "keep the original photo" — the result always
  * lands in the brush editor, where the user has the final say.
  */
 import { FilesetResolver, ImageSegmenter } from "@mediapipe/tasks-vision";
 import { BASE_PATH } from "./basePath";
+import {
+  modnetPortraitCutout,
+  type PortraitCutoutProgress,
+} from "./modnetCutout";
 
 /** Output resolution of the cutout canvas. */
 const OUT_SIZE = 1024;
@@ -72,12 +74,54 @@ export interface PhotoCutoutResult {
   coverage: number;
 }
 
+export interface PhotoCutoutOptions {
+  onProgress?: (progress: PortraitCutoutProgress) => void;
+}
+
+/** Prefer the detailed portrait matte, but never let its larger runtime make
+ * avatar creation brittle. MediaPipe remains an on-device safety fallback. */
+export async function photoCutout(
+  image: HTMLImageElement | HTMLCanvasElement,
+  { onProgress }: PhotoCutoutOptions = {}
+): Promise<PhotoCutoutResult | null> {
+  try {
+    const result = await modnetPortraitCutout(image, onProgress);
+    if (
+      result &&
+      result.coverage >= MIN_COVERAGE &&
+      result.coverage <= MAX_COVERAGE
+    ) {
+      const ctx = result.canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return result;
+      const pixels = ctx.getImageData(
+        0,
+        0,
+        result.canvas.width,
+        result.canvas.height
+      );
+      return {
+        canvas: cropToSubject(result.canvas, pixels),
+        coverage: result.coverage,
+      };
+    }
+  } catch (error) {
+    // Old devices, memory pressure, corrupt caches, and transient failures
+    // all continue through the lightweight path below.
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("MODNet portrait cutout fell back to MediaPipe", error);
+    }
+  }
+
+  onProgress?.({ kind: "fallback" });
+  return mediaPipePhotoCutout(image);
+}
+
 /**
  * Cut the background from a photo of a person. The photo is letterboxed into
  * a square (the mask pipeline is square end to end). Resolves null when no
  * plausible person is found — caller keeps the original.
  */
-export async function photoCutout(
+async function mediaPipePhotoCutout(
   image: HTMLImageElement | HTMLCanvasElement
 ): Promise<PhotoCutoutResult | null> {
   try {

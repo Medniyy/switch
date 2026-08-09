@@ -4,7 +4,7 @@
  * Create your own avatar — the manual counterpart to picking a collection.
  *
  * The user uploads any image of themselves (or anything else), it is
- * processed ENTIRELY on this device — the selfie segmenter cuts the
+ * processed ENTIRELY on this device — the portrait engine cuts the
  * background when it finds a person (lib/aiCutout.ts), face anchors are
  * detected for the mouth/blink animation — and the result is saved into the
  * same IndexedDB mask store every collection PFP uses. Nothing is ever
@@ -42,22 +42,82 @@ import {
 } from "@/lib/userMasks";
 import { PixelButton } from "@/components/ui/PixelButton";
 import { BlinkingCursor } from "@/components/ui/BlinkingCursor";
-import { isModelCached, prefetchModel } from "@/lib/modelPrefetch";
-import { BASE_PATH } from "@/lib/basePath";
 import { MaskPreparationFlow } from "@/components/mask-prep/MaskPreparationFlow";
-
-/** The subject model the upload path uses. Downloaded once per device. */
-const SEGMENTER_URL = `${BASE_PATH}/mediapipe/selfie_segmenter.tflite`;
 
 /** What the user is told while they wait. Named stages, not a spinner: the
  *  download is a genuine one-time cost and the work after it is real, so the
  *  honest thing is to say which part is happening. */
-type PrepStep = "downloading" | "finding" | "polishing";
+type PrepStep = "downloading" | "starting" | "finding" | "polishing" | "fallback";
 const STEP_LABEL: Record<PrepStep, string> = {
-  downloading: "GETTING THE CUTOUT MODEL",
-  finding: "FINDING YOU IN THE PHOTO",
-  polishing: "POLISHING THE EDGES",
+  downloading: "PREPARING YOUR CUTOUT",
+  starting: "WAKING UP THE CUTOUT ENGINE",
+  finding: "FINDING THE MAIN SUBJECT",
+  polishing: "CLEANING HAIR AND EDGES",
+  fallback: "FINISHING ON THIS DEVICE",
 };
+
+const STEP_THOUGHTS: Record<PrepStep, string[]> = {
+  downloading: [
+    "Bringing the portrait model onto this device.",
+    "It stays in this browser, so the next avatar should start faster.",
+  ],
+  starting: [
+    "Warming up the cutout engine.",
+    "Your photo stays here. Nothing is being uploaded.",
+  ],
+  finding: [
+    "Separating the person from the background.",
+    "Looking closely around hair, shoulders, and edges.",
+  ],
+  polishing: [
+    "Softening the edge so the mask feels natural.",
+    "Almost ready for your review.",
+  ],
+  fallback: [
+    "Switching to the lightweight cutout engine.",
+    "Your photo is still processed only on this device.",
+  ],
+};
+
+function ProcessingStage({ step, ratio }: { step: PrepStep; ratio: number | null }) {
+  const [thought, setThought] = useState(0);
+  const messages = STEP_THOUGHTS[step];
+
+  useEffect(() => {
+    const interval = window.setInterval(
+      () => setThought((current) => (current + 1) % messages.length),
+      1800
+    );
+    return () => window.clearInterval(interval);
+  }, [messages.length]);
+
+  return (
+    <div className="flex min-h-[40dvh] flex-col items-center justify-center gap-4 px-4">
+      <BlinkingCursor
+        label={`${STEP_LABEL[step]}${ratio === null ? "" : ` · ${Math.round(ratio * 100)}%`}`}
+        className="text-xs"
+      />
+      <div
+        className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-cream/10"
+        role="progressbar"
+        aria-label={STEP_LABEL[step]}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={ratio === null ? undefined : Math.round(ratio * 100)}
+      >
+        <div
+          className={`h-full rounded-full bg-banana transition-[width] duration-200 ${
+            ratio === null ? "w-1/3 animate-pulse" : ""
+          }`}
+          style={ratio === null ? undefined : { width: `${Math.round(ratio * 100)}%` }}
+        />
+      </div>
+      <p aria-live="polite" className="max-w-xs text-center text-xs leading-snug text-cream/45">
+        {messages[thought]}
+      </p>
+    </div>
+  );
+}
 
 
 const MAX_SOURCE_DIM = 2048; // downscale huge camera rolls before processing
@@ -166,21 +226,6 @@ export default function CreatePage() {
           i.onerror = () => rej(new Error("not an image"));
           i.src = url;
         });
-        // Pull the model down ourselves first so the wait has a real
-        // percentage behind it instead of a frozen-looking screen. It is
-        // cached on the device afterwards, so this only ever costs the first
-        // avatar — every one after that skips straight to "finding".
-        if (await isModelCached(SEGMENTER_URL)) {
-          setStage({ kind: "processing", step: "finding", ratio: null });
-        } else {
-          await prefetchModel(SEGMENTER_URL, (p) =>
-            setStage({ kind: "processing", step: "downloading", ratio: p.ratio })
-          ).catch(() => {
-            /* the loader below can still fetch it itself */
-          });
-          setStage({ kind: "processing", step: "finding", ratio: null });
-        }
-
         // Use the subject-aware result and retain the untouched square source
         // locally. The edge matte is not offered for uploads: it is unreliable
         // on portraits/complex art, while the full editor is a useful recovery
@@ -188,6 +233,21 @@ export default function CreatePage() {
         const source = squareCanvas(img);
         const prepared = await prepareArtwork(source, {
           preferSegmenter: true,
+          onSegmenterProgress: (progress) => {
+            if (progress.kind === "downloading") {
+              setStage({
+                kind: "processing",
+                step: progress.cached ? "starting" : "downloading",
+                ratio: progress.cached ? null : progress.ratio,
+              });
+              return;
+            }
+            setStage({
+              kind: "processing",
+              step: progress.kind,
+              ratio: null,
+            });
+          },
         });
         const artwork = await exportTransparentCanvas(source);
         const options = [
@@ -581,29 +641,11 @@ export default function CreatePage() {
         )}
 
         {stage.kind === "processing" && (
-          <div className="flex min-h-[40dvh] flex-col items-center justify-center gap-4 px-4">
-            <BlinkingCursor label={STEP_LABEL[stage.step]} className="text-xs" />
-            {/* A determinate bar whenever the server told us the size, so the
-                wait is measurable rather than a spinner that could mean
-                anything. Indeterminate falls back to a slow sweep. */}
-            <div className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-cream/10">
-              <div
-                className={`h-full rounded-full bg-banana transition-[width] duration-200 ${
-                  stage.ratio === null ? "w-1/3 animate-pulse" : ""
-                }`}
-                style={
-                  stage.ratio === null
-                    ? undefined
-                    : { width: `${Math.round(stage.ratio * 100)}%` }
-                }
-              />
-            </div>
-            <p className="max-w-xs text-center text-xs leading-snug text-cream/45">
-              {stage.step === "downloading"
-                ? "First-time model download. Cached on this device, so future avatars should start faster."
-                : "Everything runs on your device. Your photo is never uploaded."}
-            </p>
-          </div>
+          <ProcessingStage
+            key={stage.step}
+            step={stage.step}
+            ratio={stage.ratio}
+          />
         )}
 
         {stage.kind === "preview" && (

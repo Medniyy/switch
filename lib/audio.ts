@@ -1,4 +1,5 @@
 /** High-quality mic capture tuned to sound like the native camera.
+ *  Used everywhere EXCEPT WebKit, which needs its own profile below.
  *
  *  echoCancellation / noiseSuppression are what make WebRTC mic audio sound thin
  *  and "underwater" (they're tuned for phone calls), so we keep them OFF for a
@@ -13,8 +14,8 @@
  *  channelCount is mono: phone mics are single-capsule, so asking for stereo
  *  lands the signal in one channel only and plays back ~6 dB quieter.
  *
- *  Shared by useCameraStream (which requests audio directly from the on-screen
- *  mic tap on iOS) and useMediaRecorder. */
+ *  Shared by useCameraStream (which requests camera and mic together at boot)
+ *  and useMediaRecorder. */
 export const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   echoCancellation: false,
   noiseSuppression: false,
@@ -24,16 +25,69 @@ export const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
 };
 
 /**
- * The capture profile for EVERY platform, iOS included. An earlier build
- * special-cased iPhones to `autoGainControl: false` (on a theory that WebKit's
- * capture processing attenuates the signal even with AGC on), but that build
- * could never acquire the mic at all, so the raw path was never actually heard
- * on a device — while AGC-off HAS been heard, and records far too quiet (see
- * the header comment). On WebKit, AGC is also the ONLY level-normaliser we
- * have: the recorder-side WebAudio boost graph records as silence there.
+ * WebKit capture profile — deliberately close to `audio: true`.
+ *
+ * On WebKit, `echoCancellation: false` does not just switch off echo
+ * cancellation: it takes the capture OFF Apple's voice-processing audio unit
+ * altogether, and that unit is what carries the automatic gain. The result is
+ * a technically pristine but far quieter signal than any native app — the
+ * "way lower than the standard camera app" complaint. Every other platform can
+ * make that level back with our own WebAudio make-up gain; iOS cannot, because
+ * a WebAudio-derived track records as pure silence there (see
+ * webAudioTrackIsUnreliable). Processing is therefore the ONLY loudness lever
+ * WebKit gives us, so we take it and let iOS keep its defaults.
+ *
+ * Nothing else is constrained here on purpose: over-constraining (sampleRate,
+ * channelCount) is what pushes WebKit off its default path in the first place.
  */
+const WEBKIT_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  autoGainControl: true,
+};
+
 export function captureAudioConstraints(): MediaTrackConstraints {
-  return AUDIO_CONSTRAINTS;
+  return webAudioTrackIsUnreliable()
+    ? WEBKIT_AUDIO_CONSTRAINTS
+    : AUDIO_CONSTRAINTS;
+}
+
+/**
+ * Make-up gain for the recorder's WebAudio graph, decided by what the browser
+ * ACTUALLY did with our autoGainControl request rather than by what we asked
+ * for.
+ *
+ * The +12 dB exists for one specific platform behaviour: Android WebViews take
+ * `echoCancellation/noiseSuppression: false` as "bypass the audio-processing
+ * module", which silently drops the software AGC with it and leaves the raw
+ * mic far too quiet. Where AGC really is running, the browser has already
+ * normalised the level — boosting on top of that just drives everything into
+ * the limiter, which is what made desktop Chromium/Brave clips come back
+ * distorted and blaring. `getSettings()` reports the setting as negotiated, so
+ * it can tell those two cases apart.
+ */
+/**
+ * Whether the recorder has any reason to route this mic through WebAudio.
+ *
+ * When the browser is already levelling the signal, our graph is a
+ * pass-through that changes nothing — and a pass-through that can silently
+ * produce digital silence on some engines. Feeding MediaRecorder the original
+ * track instead is both simpler and strictly safer.
+ */
+export function micNeedsMakeupGain(track: MediaStreamTrack): boolean {
+  return makeupGainFor(track) > 1;
+}
+
+export function makeupGainFor(track: MediaStreamTrack): number {
+  try {
+    const settings = track.getSettings?.() as
+      | { autoGainControl?: boolean }
+      | undefined;
+    // `undefined` means the browser does not report the setting at all; assume
+    // AGC is doing its job rather than risk shipping distortion.
+    if (settings?.autoGainControl !== false) return 1;
+  } catch {
+    return 1;
+  }
+  return 4; // ~+12 dB, for a mic whose AGC was bypassed
 }
 
 /**
@@ -145,7 +199,7 @@ export async function createBoostedMicTrack(
 
     const source = ctx.createMediaStreamSource(new MediaStream([micTrack]));
     const gain = ctx.createGain();
-    gain.gain.value = 4; // ~+12 dB: lifts a quiet WebView mic to camera loudness
+    gain.gain.value = makeupGainFor(micTrack); // 1 unless the browser bypassed AGC
     const limiter = ctx.createDynamicsCompressor();
     limiter.threshold.value = -1; // limit only the very top so loudness stays high
     limiter.knee.value = 2;
@@ -283,7 +337,7 @@ export async function createBoostedMicPcm(
 
     const source = ctx.createMediaStreamSource(new MediaStream([micTrack]));
     const gain = ctx.createGain();
-    gain.gain.value = 4; // ~+12 dB, matching createBoostedMicTrack
+    gain.gain.value = makeupGainFor(micTrack); // matches createBoostedMicTrack
     const limiter = ctx.createDynamicsCompressor();
     limiter.threshold.value = -1;
     limiter.knee.value = 2;

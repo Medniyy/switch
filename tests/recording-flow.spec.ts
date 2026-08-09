@@ -462,3 +462,74 @@ test("a teleprompter take still records sound", async ({ page }) => {
   expect(typeof peak, `audioPeak said: ${peak}`).toBe("number");
   expect(peak as number, "clip must not be silent").toBeGreaterThan(0.01);
 });
+
+/**
+ * Read the make-up gain the recorder's WebAudio graph actually applied.
+ *
+ * Asserting on the decoded level cannot do this job: Chrome's fake capture
+ * device emits a full-scale tone, so a correct clip and a 4x-overdriven one
+ * both come back pinned at the top. The gain node itself is unambiguous.
+ */
+function captureGainNodes() {
+  return `(() => {
+    window.__gainValues = [];
+    const realCreateGain = AudioContext.prototype.createGain;
+    AudioContext.prototype.createGain = function () {
+      const node = realCreateGain.call(this);
+      window.__gainValues.push(node);
+      return node;
+    };
+  })()`;
+}
+
+async function makeupGain(page: Page): Promise<number | undefined> {
+  return page.evaluate(
+    () =>
+      (window as unknown as { __gainValues: GainNode[] }).__gainValues[0]?.gain
+        .value
+  );
+}
+
+test("a mic the browser is already levelling is not boosted on top", async ({
+  page,
+}) => {
+  // The regression that shipped to desktop Brave: +12 dB stacked on the
+  // browser's own AGC drove every take into the limiter, and clips came back
+  // blaring and distorted.
+  await page.addInitScript(captureGainNodes());
+
+  await liveVideoStage(page);
+  await recordAndRead(page, 2);
+
+  expect(await makeupGain(page)).toBe(1);
+});
+
+test("a mic whose AGC the browser bypassed still gets the make-up gain", async ({
+  page,
+}) => {
+  // Android WebViews read `echoCancellation: false` as "bypass the whole audio
+  // processing module", dropping the software AGC with it. That mic is genuinely
+  // quiet and does need the boost — the branch must survive the fix above.
+  await page.addInitScript(captureGainNodes());
+  await page.addInitScript(() => {
+    const realGetUserMedia = navigator.mediaDevices.getUserMedia.bind(
+      navigator.mediaDevices
+    );
+    navigator.mediaDevices.getUserMedia = async (constraints) => {
+      const stream = await realGetUserMedia(constraints);
+      for (const track of stream.getAudioTracks()) {
+        const realGetSettings = track.getSettings.bind(track);
+        track.getSettings = () => ({
+          ...realGetSettings(),
+          autoGainControl: false,
+        });
+      }
+      return stream;
+    };
+  });
+
+  await liveVideoStage(page);
+  await recordAndRead(page, 2);
+
+  expect(await makeupGain(page)).toBe(4);
+});

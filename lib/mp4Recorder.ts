@@ -401,7 +401,16 @@ export async function startMp4Recording(
       // Listen briefly before committing: a real mic shows a noise floor
       // within a few blocks; exact digital silence means the graph is lying,
       // so hand the whole job to MediaRecorder, whose WebKit path records the
-      // raw (audible) track. Chromium/Gecko skip this entirely.
+      // raw (audible) track.
+      //
+      // ⚠️ Chromium/Gecko must NOT join in, however tempting it looks when a
+      // Chrome take comes back silent. Their capture can gate a quiet room to
+      // exact zeros, so a short listen is not evidence of a dead tap — and the
+      // false fallback it triggers costs the flat, editable MP4 that this
+      // engine exists to produce (measured: fragmented output on every take).
+      // A Chromium mic that reports live and still delivers nothing is muted
+      // or held by another app, which no engine here can fix; useMediaRecorder
+      // says so out loud instead.
       if (mic && webAudioTrackIsUnreliable()) {
         await sleep(MIC_PREFLIGHT_MS);
         if (audioPeak === 0) {

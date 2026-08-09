@@ -4,6 +4,7 @@ import { RefObject, useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore, VIDEO_QUALITY } from "@/store/useAppStore";
 import {
   createBoostedMicTrack,
+  micNeedsMakeupGain,
   webAudioTrackIsUnreliable,
   type ProcessedMic,
 } from "@/lib/audio";
@@ -106,6 +107,21 @@ export interface RecordingResult {
 }
 
 /**
+ * A microphone can be granted, live, and still deliver nothing at all — muted
+ * at the OS level, held exclusively by another app, or simply the wrong input
+ * of several. No recording engine can repair any of those, so the only useful
+ * thing the app can do is say which device went quiet and what to check.
+ */
+function silentMicMessage(track: MediaStreamTrack | null): string {
+  const label = track?.label?.trim();
+  const named = label ? `"${label}"` : "your microphone";
+  if (track?.muted) {
+    return `Saved, but this clip has no sound — ${named} is muted or in use by another app. Close whatever else is using it, or unmute it in your system sound settings.`;
+  }
+  return `Saved, but this clip has no sound — ${named} sent silence. Check it is the right input and is not muted in your system sound settings.`;
+}
+
+/**
  * Records the composited canvas into a Blob. Enforces a hard 60s cap and mixes
  * in mic audio when enabled (falls back to silent if blocked).
  *
@@ -196,7 +212,11 @@ export function useMediaRecorder(
             return;
           }
           if (audioDropped) {
-            setError("Saved, but this clip has no sound — the mic didn't reach the recording.");
+            // Name the input. "No sound" with a mic that reports itself live
+            // and granted is almost always the WRONG device being captured (a
+            // virtual/monitor input, or a headset that is not the one you are
+            // speaking into) — unanswerable without knowing which one it was.
+            setError(silentMicMessage(audioTrackRef?.current ?? null));
           }
           publish(blob, "mp4");
         })
@@ -260,13 +280,15 @@ export function useMediaRecorder(
         micTrack &&
         micTrack.readyState === "live"
       ) {
-        // On WebKit a WebAudio-derived track records as pure silence, with
-        // every API involved reporting success — this is why iPhone clips came
-        // back with no sound and no warning. Hand MediaRecorder the ORIGINAL
-        // track there: no boost, no limiter, no clone, but actually audible.
-        // Not registered in micStreamRef, because that track belongs to the
-        // camera hook and stopping it would kill the live mic.
-        if (webAudioTrackIsUnreliable()) {
+        // Hand MediaRecorder the ORIGINAL track whenever WebAudio would add
+        // nothing: on WebKit, where a WebAudio-derived track records as pure
+        // silence with every API reporting success, and equally on any browser
+        // whose AGC is already levelling this mic — there the graph is a
+        // pass-through carrying the same silence risk for no benefit. No boost,
+        // no limiter, no clone, and audible. Not registered in micStreamRef,
+        // because that track belongs to the camera hook and stopping it would
+        // kill the live mic.
+        if (webAudioTrackIsUnreliable() || !micNeedsMakeupGain(micTrack)) {
           tracks.push(micTrack);
           micStreamRef.current = null;
         } else {
@@ -397,6 +419,11 @@ export function useMediaRecorder(
     // only covers a mic that was present and then produced nothing.
     if (audioOn && (!micTrack || micTrack.readyState !== "live")) {
       setError("No microphone available — this clip will record silently.");
+    } else if (audioOn && micTrack?.muted) {
+      // `muted` on a live track means the OS or another app is holding the
+      // input: it will deliver digital silence for the whole take. Say so now
+      // rather than after 60 seconds of talking to a dead mic.
+      setError(silentMicMessage(micTrack));
     }
 
     // Engine 1: WebCodecs. WebKit is intentionally excluded when sound is on:

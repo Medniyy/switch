@@ -34,6 +34,7 @@ import type { NFT } from "@/lib/types";
 import type { MaskPlacement } from "@/lib/imageUtils";
 import {
   blobToImage,
+  CUTOUT_ENGINE_VERSION,
   exportTransparentCanvas,
   loadImage,
   MY_AVATARS,
@@ -229,6 +230,7 @@ export function MaskPreparationFlow({
         editedMaskBlob: blob,
         editedMaskType: type,
         maskMode,
+        cutoutEngineVersion: CUTOUT_ENGINE_VERSION,
         maskFlip,
         anchorOffsetX: fit.anchorOffsetX,
         anchorOffsetY: fit.anchorOffsetY,
@@ -497,11 +499,10 @@ function useStartingMask(
     setAutoStatus("processing");
     const frame = window.requestAnimationFrame(async () => {
       try {
-        // Prefer the subject-aware engine for the first result. The geometric
+        // Prefer the general-subject engine for the first result. The geometric
         // matte is fast, but on dark or detailed art it can walk through the
-        // character itself (Sensei hats/faces are a concrete example). The
-        // segmenter preserves the subject and prepareArtwork still falls back
-        // to the matte when the model cannot find one.
+        // character itself. U²-Netp handles people, animals, products, and PFP
+        // artwork; prepareArtwork still keeps the edge matte as a fallback.
         const prepared = await prepareArtwork(rawImage, {
           preferSegmenter: true,
         });
@@ -1167,9 +1168,9 @@ function MaskPrepEditor({
             return snapshot;
           })();
 
-      // This is deliberately deterministic. The portrait segmenter produces
-      // the intact Sensei-style cutout; prepareArtwork falls back to the matte
-      // only when the segmenter fails or returns implausible coverage.
+      // This is deliberately deterministic. The general-subject model handles
+      // both portraits and PFP artwork; prepareArtwork falls back to the edge
+      // matte only when the model fails or returns implausible coverage.
       const prepared = await prepareArtwork(source, {
         crop: false,
         preferSegmenter: true,

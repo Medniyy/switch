@@ -15,9 +15,9 @@ export interface CutoutResult {
 
 /**
  * Given a loaded NFT image, returns a background-removed version when `enabled`,
- * or the original image otherwise. The cutout is computed once per image (a flat
- * chroma-key flood-fill, see lib/removeBackground) and converted back into an
- * <img> so the canvas draw path stays identical.
+ * or the original image otherwise. The cutout is computed once per image by
+ * the shared general-subject pipeline and converted back into an <img> so the
+ * canvas draw path stays identical.
  *
  * Falls back to the original image if the background isn't flat enough to key
  * cleanly, so the mask is never worse than the un-processed one.
@@ -48,7 +48,7 @@ export function useCutoutImage(
     const run = async () => {
       let canvas: HTMLCanvasElement | null = null;
       try {
-        const prepared = await prepareArtwork(raw, { allowSegmenter: false });
+        const prepared = await prepareArtwork(raw, { preferSegmenter: true });
         canvas = prepared.via === "original" ? null : prepared.canvas;
       } catch {
         canvas = null; // tainted/undecodable — degrade to the original below

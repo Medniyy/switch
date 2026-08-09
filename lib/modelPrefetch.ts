@@ -3,7 +3,7 @@
  *
  * Two problems this solves, both about how the wait feels:
  *
- *  1. MediaPipe (and any wasm runtime) takes a model URL and gives you back
+ *  1. An inference runtime takes a model URL and gives you back
  *     nothing until it is done. On a slow connection that is many seconds of
  *     a screen that looks frozen — the app appears broken rather than busy.
  *     Fetching the bytes ourselves first lets us report actual percentage,
@@ -23,7 +23,7 @@
  * evicted entry simply means one more download, never a broken flow.
  */
 
-const CACHE_NAME = "switch-models-v1";
+const CACHE_NAME = "switch-models-v2";
 
 export interface PrefetchProgress {
   /** 0..1 when the server sent a length, otherwise null (indeterminate). */
@@ -39,6 +39,9 @@ export interface PrefetchProgress {
 async function openCache(): Promise<Cache | null> {
   try {
     if (typeof caches === "undefined") return null;
+    // v1 held the retired portrait-only model. Reclaim that storage instead
+    // of leaving a useless 6.6MB artifact on every returning device.
+    await caches.delete("switch-models-v1");
     return await caches.open(CACHE_NAME);
   } catch {
     return null;

@@ -20,9 +20,9 @@
  *    construction. Its failure modes both come from that same blind spot —
  *    a soft or low-contrast outline lets it walk into the character, and a
  *    backdrop that is a SCENE has no single answer for it to find.
- *  - "segmenter" — MODNet portrait matting (6.6MB quantized, Apache-2.0,
+ *  - "segmenter" — U²-Netp salient-object detection (4.6MB, Apache-2.0,
  *    lazy), with MediaPipe's selfie segmenter as a 250KB fallback. This path
- *    knows what a PERSON is, which is the knowledge the matte lacks.
+ *    looks for the main subject instead of requiring it to be a person.
  *
  * Which goes first is decided by the CALLER, because it depends on what the
  * image is, and the caller is the only one who knows. `preferSegmenter` is
@@ -38,12 +38,12 @@
  *     Claynosaurz/Bullpen art: it bailed on 4 of 6 and returned swiss-cheese
  *     mattes on the rest. Trained on photographs; stylised characters are out
  *     of its distribution.
- *   - MODNet is shipped only for portraits; arbitrary stylised scenes still
- *     need a separately evaluated salient-object model.
+ *   - MODNet was removed after live testing showed the core mismatch: it is
+ *     a portrait model, while custom avatars include arbitrary PFP artwork.
  */
 import { removeBackground } from "./removeBackground";
 import { photoCutout } from "./aiCutout";
-import type { PortraitCutoutProgress } from "./modnetCutout";
+import type { SubjectCutoutProgress } from "./u2netCutout";
 
 export type PrepareVia = "matte" | "segmenter" | "original";
 
@@ -95,6 +95,53 @@ function opaqueFraction(canvas: HTMLCanvasElement): number {
   return opaque / (S * S);
 }
 
+/** Trim transparent model padding while keeping a square mask and a small
+ * breathing margin. The model works at a stable 1024px output size; fitting
+ * should depend on the subject bounds rather than unused frame area. */
+function cropTransparentSquare(
+  canvas: HTMLCanvasElement,
+  padding = 0.04
+): HTMLCanvasElement {
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return canvas;
+  const { width, height } = canvas;
+  const data = ctx.getImageData(0, 0, width, height).data;
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (data[(y * width + x) * 4 + 3] < 16) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < minX || maxY < minY) return canvas;
+
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const subjectSide = Math.max(maxX - minX + 1, maxY - minY + 1);
+  const side = Math.min(
+    width,
+    height,
+    Math.ceil(subjectSide * (1 + padding * 2))
+  );
+  if (side >= Math.min(width, height)) return canvas;
+
+  const sx = Math.max(0, Math.min(width - side, Math.round(cx - side / 2)));
+  const sy = Math.max(0, Math.min(height - side, Math.round(cy - side / 2)));
+  const cropped = document.createElement("canvas");
+  cropped.width = side;
+  cropped.height = side;
+  const croppedCtx = cropped.getContext("2d");
+  if (!croppedCtx) return canvas;
+  croppedCtx.drawImage(canvas, sx, sy, side, side, 0, 0, side, side);
+  return cropped;
+}
+
 export interface PrepareOptions {
   /** Allow the ML fallback. Off for callers that must stay instant. */
   allowSegmenter?: boolean;
@@ -102,8 +149,8 @@ export interface PrepareOptions {
   preferSegmenter?: boolean;
   /** Crop to the subject once its background is gone. */
   crop?: boolean;
-  /** Honest progress from the on-device portrait engine. */
-  onSegmenterProgress?: (progress: PortraitCutoutProgress) => void;
+  /** Honest progress from the on-device general-subject engine. */
+  onSegmenterProgress?: (progress: SubjectCutoutProgress) => void;
 }
 
 /** Keeping almost everything, or almost nothing, is rarely a real cutout. */
@@ -126,7 +173,7 @@ export async function prepareArtwork(
   const wantSegmenter =
     allowSegmenter && (preferSegmenter || !matte || isSuspect(matte));
   const segmented = wantSegmenter
-    ? await runSegmenter(source, onSegmenterProgress)
+    ? await runSegmenter(source, onSegmenterProgress, crop)
     : null;
 
   const preferred: PreparedCandidate[] = preferSegmenter
@@ -187,12 +234,17 @@ async function runMatte(
 
 async function runSegmenter(
   source: HTMLImageElement | HTMLCanvasElement,
-  onProgress?: (progress: PortraitCutoutProgress) => void
+  onProgress?: (progress: SubjectCutoutProgress) => void,
+  crop = true
 ): Promise<PreparedCandidate | null> {
   try {
     const cut = await photoCutout(source, { onProgress });
     if (!cut) return null;
-    return { canvas: cut.canvas, via: "segmenter", coverage: cut.coverage };
+    return {
+      canvas: crop ? cropTransparentSquare(cut.canvas) : cut.canvas,
+      via: "segmenter",
+      coverage: cut.coverage,
+    };
   } catch {
     return null;
   }

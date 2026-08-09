@@ -1,32 +1,36 @@
 /**
- * High-quality portrait matting with quantized MODNet, entirely in-browser.
+ * General-subject background removal with U²-Netp, entirely in-browser.
  *
- * The 6.3MB model is loaded only when a person uploads an image. ONNX Runtime
- * runs through its universal SIMD/WASM provider so the same path works in
- * Android Chromium and iOS WebKit; proxy mode keeps inference off the UI
- * thread. Both the runtime and model are self-hosted.
+ * Unlike a portrait matting model, U²-Net is trained for salient-object
+ * detection: people, products, animals, and illustrated characters are all
+ * valid inputs. The compact 4.6MB U²-Netp weights are loaded only when an
+ * image is prepared, then retained in browser cache. ONNX Runtime uses its
+ * universal SIMD/WASM provider so this same path works in iOS WebKit and
+ * Android Chromium without uploading the image.
  */
 import { BASE_PATH } from "./basePath";
 import { fetchModelBytes } from "./modelPrefetch";
 
-const MODEL_SIZE = 512;
+const MODEL_SIZE = 320;
 const OUTPUT_SIZE = 1024;
-const MODEL_URL = `${BASE_PATH}/models/modnet-portrait-q8.onnx`;
+const MODEL_URL = `${BASE_PATH}/models/u2netp-general.onnx`;
 const ORT_PATH = `${BASE_PATH}/ort/`;
+const MATTE_LOW = 0.04;
+const MATTE_HIGH = 0.92;
 
-export type PortraitCutoutProgress =
+export type SubjectCutoutProgress =
   | { kind: "downloading"; ratio: number | null; cached: boolean }
   | { kind: "starting" }
   | { kind: "finding" }
   | { kind: "polishing" }
   | { kind: "fallback" };
 
-export interface PortraitCutoutResult {
+export interface SubjectCutoutResult {
   canvas: HTMLCanvasElement;
   coverage: number;
 }
 
-type ProgressListener = (progress: PortraitCutoutProgress) => void;
+type ProgressListener = (progress: SubjectCutoutProgress) => void;
 
 async function createSession(onProgress?: ProgressListener) {
   const modelPromise = fetchModelBytes(MODEL_URL, (progress) => {
@@ -42,8 +46,8 @@ async function createSession(onProgress?: ProgressListener) {
   ]);
 
   // GitHub Pages cannot supply cross-origin-isolation headers, so explicitly
-  // select one WASM thread. Proxy mode still runs that work away from React's
-  // main thread and keeps the progress UI moving on iPhone and Android.
+  // use one WASM thread. Proxy mode keeps inference away from React's UI
+  // thread on both iPhone and Android.
   ort.env.wasm.wasmPaths = ORT_PATH;
   ort.env.wasm.numThreads = 1;
   ort.env.wasm.proxy = typeof document !== "undefined";
@@ -102,7 +106,7 @@ function modelInput(canvas: HTMLCanvasElement): Float32Array {
   resized.width = MODEL_SIZE;
   resized.height = MODEL_SIZE;
   const ctx = resized.getContext("2d", { willReadFrequently: true });
-  if (!ctx) throw new Error("Could not prepare portrait input");
+  if (!ctx) throw new Error("Could not prepare subject input");
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(canvas, 0, 0, MODEL_SIZE, MODEL_SIZE);
@@ -112,9 +116,9 @@ function modelInput(canvas: HTMLCanvasElement): Float32Array {
   const tensor = new Float32Array(plane * 3);
   for (let pixel = 0; pixel < plane; pixel++) {
     const source = pixel * 4;
-    tensor[pixel] = rgba[source] / 127.5 - 1;
-    tensor[plane + pixel] = rgba[source + 1] / 127.5 - 1;
-    tensor[plane * 2 + pixel] = rgba[source + 2] / 127.5 - 1;
+    tensor[pixel] = (rgba[source] / 255 - 0.485) / 0.229;
+    tensor[plane + pixel] = (rgba[source + 1] / 255 - 0.456) / 0.224;
+    tensor[plane * 2 + pixel] = (rgba[source + 2] / 255 - 0.406) / 0.225;
   }
   return tensor;
 }
@@ -145,25 +149,32 @@ function applyMatte(
   matteHeight: number
 ) {
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) throw new Error("Could not apply portrait matte");
+  if (!ctx) throw new Error("Could not apply subject matte");
   const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  let min = Infinity;
+  let max = -Infinity;
+  for (const value of matte) {
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  const range = Math.max(1e-6, max - min);
   let foreground = 0;
 
   for (let y = 0; y < canvas.height; y++) {
     for (let x = 0; x < canvas.width; x++) {
-      const confidence = Math.max(
-        0,
-        Math.min(
-          1,
-          sampleBilinear(
-            matte,
-            matteWidth,
-            matteHeight,
-            ((x + 0.5) * matteWidth) / canvas.width - 0.5,
-            ((y + 0.5) * matteHeight) / canvas.height - 0.5
-          )
-        )
+      const raw = sampleBilinear(
+        matte,
+        matteWidth,
+        matteHeight,
+        ((x + 0.5) * matteWidth) / canvas.width - 0.5,
+        ((y + 0.5) * matteHeight) / canvas.height - 0.5
       );
+      const normalized = Math.max(0, Math.min(1, (raw - min) / range));
+      const linear = Math.max(
+        0,
+        Math.min(1, (normalized - MATTE_LOW) / (MATTE_HIGH - MATTE_LOW))
+      );
+      const confidence = linear * linear * (3 - 2 * linear);
       if (confidence > 0.5) foreground++;
       const alphaIndex = (y * canvas.width + x) * 4 + 3;
       pixels.data[alphaIndex] = Math.round(
@@ -176,10 +187,10 @@ function applyMatte(
   return foreground / (canvas.width * canvas.height);
 }
 
-export async function modnetPortraitCutout(
+export async function generalSubjectCutout(
   source: HTMLImageElement | HTMLCanvasElement,
   onProgress?: ProgressListener
-): Promise<PortraitCutoutResult | null> {
+): Promise<SubjectCutoutResult | null> {
   const canvas = squareSource(source);
   if (!canvas) return null;
 
@@ -193,10 +204,10 @@ export async function modnetPortraitCutout(
   ]);
   let output: Awaited<ReturnType<typeof session.run>>[string] | undefined;
   try {
-    const result = await session.run({ input });
-    output = result.output;
+    const result = await session.run({ [session.inputNames[0]]: input });
+    output = result[session.outputNames[0]];
     if (!output || output.type !== "float32" || output.dims.length !== 4) {
-      throw new Error("MODNet returned an invalid matte");
+      throw new Error("U²-Netp returned an invalid matte");
     }
 
     onProgress?.({ kind: "polishing" });

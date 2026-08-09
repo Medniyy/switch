@@ -1,7 +1,7 @@
 /**
  * On-device photo background removal, for the "create your own avatar" flow.
  *
- * Runs quantized MODNet for a detailed portrait matte and keeps MediaPipe's
+ * Runs compact U²-Netp for a general-subject matte and keeps MediaPipe's
  * 250KB selfie segmenter as a compatibility fallback. Both execute in the
  * browser; nothing is uploaded. Model files are fetched lazily, so the record
  * path and initial page load pay nothing.
@@ -12,9 +12,9 @@
  * prototyped with DeepLabV3 (2.8MB) and evaluated on real Sensei, SMB,
  * Claynosaurz and Bullpen tokens: it bailed on 4/6 and produced swiss-cheese
  * mattes (the character's face classified as background) on the rest. Do not
- * re-add that path without a model actually trained on stylised art. MODNet
- * is deliberately scoped to portrait uploads; the geometric matte
- * (lib/removeBackground.ts) remains the tool for flat-backdrop art.
+ * re-add that path without measuring the replacement on the actual artwork.
+ * U²-Netp is a salient-object model rather than a semantic class model, while
+ * the geometric matte remains useful for perfectly flat backdrops.
  *
  * Callers must treat null as "keep the original photo" — the result always
  * lands in the brush editor, where the user has the final say.
@@ -22,9 +22,9 @@
 import { FilesetResolver, ImageSegmenter } from "@mediapipe/tasks-vision";
 import { BASE_PATH } from "./basePath";
 import {
-  modnetPortraitCutout,
-  type PortraitCutoutProgress,
-} from "./modnetCutout";
+  generalSubjectCutout,
+  type SubjectCutoutProgress,
+} from "./u2netCutout";
 
 /** Output resolution of the cutout canvas. */
 const OUT_SIZE = 1024;
@@ -75,17 +75,17 @@ export interface PhotoCutoutResult {
 }
 
 export interface PhotoCutoutOptions {
-  onProgress?: (progress: PortraitCutoutProgress) => void;
+  onProgress?: (progress: SubjectCutoutProgress) => void;
 }
 
-/** Prefer the detailed portrait matte, but never let its larger runtime make
+/** Prefer the general-subject matte, but never let its larger runtime make
  * avatar creation brittle. MediaPipe remains an on-device safety fallback. */
 export async function photoCutout(
   image: HTMLImageElement | HTMLCanvasElement,
   { onProgress }: PhotoCutoutOptions = {}
 ): Promise<PhotoCutoutResult | null> {
   try {
-    const result = await modnetPortraitCutout(image, onProgress);
+    const result = await generalSubjectCutout(image, onProgress);
     if (
       result &&
       result.coverage >= MIN_COVERAGE &&
@@ -108,7 +108,7 @@ export async function photoCutout(
     // Old devices, memory pressure, corrupt caches, and transient failures
     // all continue through the lightweight path below.
     if (process.env.NODE_ENV !== "production") {
-      console.warn("MODNet portrait cutout fell back to MediaPipe", error);
+      console.warn("U²-Netp subject cutout fell back to MediaPipe", error);
     }
   }
 

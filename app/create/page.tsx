@@ -4,8 +4,8 @@
  * Create your own avatar — the manual counterpart to picking a collection.
  *
  * The user uploads any image of themselves (or anything else), it is
- * processed ENTIRELY on this device — the portrait engine cuts the
- * background when it finds a person (lib/aiCutout.ts), face anchors are
+ * processed ENTIRELY on this device — the subject engine cuts the
+ * background around the main subject (lib/aiCutout.ts), face anchors are
  * detected for the mouth/blink animation — and the result is saved into the
  * same IndexedDB mask store every collection PFP uses. Nothing is ever
  * uploaded anywhere; the avatars listed here exist only in this browser.
@@ -31,6 +31,7 @@ import {
 } from "@/lib/prepareArtwork";
 import {
   blobToImage,
+  CUTOUT_ENGINE_VERSION,
   deleteSavedMask,
   exportTransparentCanvas,
   listSavedMasks,
@@ -58,7 +59,7 @@ const STEP_LABEL: Record<PrepStep, string> = {
 
 const STEP_THOUGHTS: Record<PrepStep, string[]> = {
   downloading: [
-    "Bringing the portrait model onto this device.",
+    "Bringing the subject model onto this device.",
     "It stays in this browser, so the next avatar should start faster.",
   ],
   starting: [
@@ -66,8 +67,8 @@ const STEP_THOUGHTS: Record<PrepStep, string[]> = {
     "Your photo stays here. Nothing is being uploaded.",
   ],
   finding: [
-    "Separating the person from the background.",
-    "Looking closely around hair, shoulders, and edges.",
+    "Separating the main subject from the background.",
+    "Looking closely around outlines, details, and edges.",
   ],
   polishing: [
     "Softening the edge so the mask feels natural.",
@@ -356,6 +357,7 @@ export default function CreatePage() {
           editedMaskBlob: exported.blob,
           editedMaskType: exported.type,
           maskMode: "adjusted",
+          cutoutEngineVersion: CUTOUT_ENGINE_VERSION,
           maskFlip: false,
           anchorOffsetX: 0,
           anchorOffsetY: 0,
@@ -753,7 +755,12 @@ function PreviewStage({
         </p>
       </div>
       <div className="aspect-square w-full overflow-hidden rounded-[var(--radius-card)] pixel-border bg-[conic-gradient(#22252b_0_25%,#181b20_0_50%,#22252b_0_75%,#181b20_0)] bg-[length:24px_24px]">
-        <canvas ref={viewRef} className="h-full w-full" />
+        <canvas
+          ref={viewRef}
+          className="h-full w-full"
+          role="img"
+          aria-label="Avatar cutout preview"
+        />
       </div>
 
       {/* Show the winning cutout and the untouched source. A secondary edge

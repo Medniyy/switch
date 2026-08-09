@@ -54,6 +54,7 @@ import {
   deleteSavedMask,
   loadLastSavedMask,
   loadSavedMask,
+  needsCutoutRefresh,
   nftMaskKey,
   rememberLastMask,
   saveUserMask,
@@ -238,6 +239,10 @@ export function RecordView() {
         const saved = await loadSavedMask(key);
         if (cancelled) return;
         if (!saved) {
+          setMaskLoadStatus("missing");
+          return;
+        }
+        if (needsCutoutRefresh(saved)) {
           setMaskLoadStatus("missing");
           return;
         }

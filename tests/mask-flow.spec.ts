@@ -39,7 +39,7 @@ async function openEditor(page: Page) {
         }
       ).__switchMaskEditor;
       const c = ed?.getEditCanvas();
-      return !!c && c.width === 300;
+      return !!c && c.width > 0;
     },
     undefined,
     { timeout: 20_000 }
@@ -129,80 +129,91 @@ test("first-time journey: choice → keep full → reload → reset → customiz
   await pickBrush(page, "large");
 
   const box = await canvasBox(page);
+  const imageSide = await page.evaluate(() =>
+    (
+      window as unknown as {
+        __switchMaskEditor?: { getEditCanvas: () => HTMLCanvasElement | null };
+      }
+    ).__switchMaskEditor?.getEditCanvas()?.width ?? 0
+  );
+  expect(imageSide).toBeGreaterThan(0);
+  const center = Math.floor(imageSide / 2);
+  const quarter = Math.floor(imageSide / 4);
+  const threeQuarters = Math.floor((imageSide * 3) / 4);
   const cx = box.width / 2;
   const cy = box.height / 2;
 
   // 9: erase part of the character (center).
   await pickTool(page, "Erase");
   await strokeAt(page, cx, cy);
-  expect((await editPixel(page, 150, 150))!.a).toBeLessThan(60);
+  expect((await editPixel(page, center, center))!.a).toBeLessThan(60);
 
   // 10: restore part of the erased area.
   await pickTool(page, "Restore");
   await strokeAt(page, cx, cy);
-  expect((await editPixel(page, 150, 150))!.a).toBeGreaterThan(200);
+  expect((await editPixel(page, center, center))!.a).toBeGreaterThan(200);
 
   // 11: change brush size (small) and confirm it still erases.
   await pickTool(page, "Erase");
   await pickBrush(page, "small");
   await strokeAt(page, cx, cy, 2);
-  expect((await editPixel(page, 150, 150))!.a).toBeLessThan(60);
+  expect((await editPixel(page, center, center))!.a).toBeLessThan(60);
 
   // 12–13: undo multiple, redo multiple. Build 3 distinct strokes.
   await pickBrush(page, "large");
   // Map image coords → canvas CSS coords accounting for the centred, letterboxed
   // fit (the canvas is not necessarily square).
-  const fitScale = Math.min(box.width, box.height) / 300;
-  const imgLeft = box.width / 2 - 150 * fitScale;
-  const imgTop = box.height / 2 - 150 * fitScale;
+  const fitScale = Math.min(box.width, box.height) / imageSide;
+  const imgLeft = box.width / 2 - (imageSide / 2) * fitScale;
+  const imgTop = box.height / 2 - (imageSide / 2) * fitScale;
   const toScreen = (ix: number, iy: number) => ({
     sx: imgLeft + ix * fitScale,
     sy: imgTop + iy * fitScale,
   });
   for (const [ix, iy] of [
-    [75, 75],
-    [225, 75],
-    [75, 225],
+    [quarter, quarter],
+    [threeQuarters, quarter],
+    [quarter, threeQuarters],
   ] as const) {
     const s = toScreen(ix, iy);
     await strokeAt(page, s.sx, s.sy);
   }
-  expect((await editPixel(page, 75, 75))!.a).toBeLessThan(60);
-  expect((await editPixel(page, 225, 75))!.a).toBeLessThan(60);
-  expect((await editPixel(page, 75, 225))!.a).toBeLessThan(60);
+  expect((await editPixel(page, quarter, quarter))!.a).toBeLessThan(60);
+  expect((await editPixel(page, threeQuarters, quarter))!.a).toBeLessThan(60);
+  expect((await editPixel(page, quarter, threeQuarters))!.a).toBeLessThan(60);
 
   const undo = page.getByRole("button", { name: "Undo" });
   const redo = page.getByRole("button", { name: "Redo" });
   await undo.click(); // undo BL
   await page.waitForTimeout(40);
-  expect((await editPixel(page, 75, 225))!.a).toBeGreaterThan(200);
+  expect((await editPixel(page, quarter, threeQuarters))!.a).toBeGreaterThan(200);
   await undo.click(); // undo TR
   await page.waitForTimeout(40);
-  expect((await editPixel(page, 225, 75))!.a).toBeGreaterThan(200);
+  expect((await editPixel(page, threeQuarters, quarter))!.a).toBeGreaterThan(200);
   await redo.click(); // redo TR
   await page.waitForTimeout(40);
-  expect((await editPixel(page, 225, 75))!.a).toBeLessThan(60);
+  expect((await editPixel(page, threeQuarters, quarter))!.a).toBeLessThan(60);
   await redo.click(); // redo BL
   await page.waitForTimeout(40);
-  expect((await editPixel(page, 75, 225))!.a).toBeLessThan(60);
+  expect((await editPixel(page, quarter, threeQuarters))!.a).toBeLessThan(60);
 
   // 14: reset and CANCEL → edits remain.
   page.once("dialog", (d) => d.dismiss());
   await page.getByRole("button", { name: "Reset", exact: true }).click();
   await page.waitForTimeout(60);
-  expect((await editPixel(page, 150, 150))!.a).toBeLessThan(60);
+  expect((await editPixel(page, center, center))!.a).toBeLessThan(60);
 
   // 15: reset and CONFIRM → back to original opaque seed.
   page.once("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "Reset", exact: true }).click();
   await page.waitForTimeout(60);
-  expect((await editPixel(page, 150, 150))!.a).toBeGreaterThan(200);
-  expect((await editPixel(page, 75, 75))!.a).toBeGreaterThan(200);
+  expect((await editPixel(page, center, center))!.a).toBeGreaterThan(200);
+  expect((await editPixel(page, quarter, quarter))!.a).toBeGreaterThan(200);
   await expect(undo).toBeDisabled();
 
   // Make a real edit, then save (18).
   await strokeAt(page, cx, cy);
-  expect((await editPixel(page, 150, 150))!.a).toBeLessThan(60);
+  expect((await editPixel(page, center, center))!.a).toBeLessThan(60);
   await page.getByRole("button", { name: /looks good/i }).click();
   await expect
     .poll(async () => (await readMaskRecord(page, maskKey(NFT_A)))?.maskMode, {
@@ -341,6 +352,58 @@ test("Edit mask on a saved NFT opens the editor directly (no first-time choice)"
 // ---------------------------------------------------------------------------
 // Legacy record without maskMode + corrupted blob (graceful).
 // ---------------------------------------------------------------------------
+test("untouched masks from the retired engine are prepared again once", async ({
+  page,
+}) => {
+  await gotoRecord(page);
+  const sourceUrl = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 96;
+    canvas.height = 96;
+    const context = canvas.getContext("2d")!;
+    context.fillStyle = "#7dd3fc";
+    context.fillRect(0, 0, 96, 96);
+    context.fillStyle = "#f97316";
+    context.fillRect(24, 16, 48, 72);
+    return canvas.toDataURL("image/png");
+  });
+  const now = Date.now();
+  await putRawRecord(
+    page,
+    {
+      key: maskKey(NFT_A),
+      collectionId: NFT_A.collection,
+      tokenId: String(NFT_A.id),
+      tokenName: NFT_A.name,
+      sourceImageUrl: sourceUrl,
+      maskMode: "full",
+      maskFlip: false,
+      anchorOffsetX: 0,
+      anchorOffsetY: 0,
+      scaleOffset: 0,
+      placement: null,
+      createdAt: now,
+      updatedAt: now,
+      version: 2,
+      // no cutoutEngineVersion: this came from the retired portrait pipeline
+    },
+    "valid"
+  );
+
+  await page.evaluate(
+    ({ nft, image }) => {
+      (
+        window as unknown as {
+          __appStore: { getState: () => { setSelectedNFT: (v: unknown) => void } };
+        }
+      ).__appStore.getState().setSelectedNFT({ ...nft, image });
+    },
+    { nft: NFT_A, image: sourceUrl }
+  );
+
+  await waitChoice(page);
+});
+
 test("legacy record without maskMode loads and reaches the live stage", async ({
   page,
 }) => {

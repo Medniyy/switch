@@ -17,9 +17,9 @@ self-hosted and loaded lazily:
    bottleneck path cost), where a "step" is *relative* contrast, not a raw
    channel delta.
 
-`lib/prepareArtwork.ts` is the single entry point. Custom uploads use
-quantized MODNet (6.6MB, Apache-2.0, lazy) for a detailed portrait alpha matte,
-then MediaPipe selfie segmentation (250KB, Apache-2.0) as a compatibility
+`lib/prepareArtwork.ts` is the single entry point. Custom uploads use U²-Netp
+(4.6MB, Apache-2.0, lazy) for a general-subject alpha matte, then MediaPipe
+selfie segmentation (250KB, Apache-2.0) as a compatibility
 fallback. The deterministic edge matte and untouched original remain recovery
 choices. If the preferred result keeps an implausible amount of the frame, a
 plausible fallback is promoted automatically.
@@ -57,7 +57,7 @@ A fragmentation quality gate was prototyped to auto-reject mangled results
 and **removed**: it rejected the good Bullpen cutout while passing the bad
 Claynosaurz one, so it threw away more than it saved.
 
-## If we want those two solved: the ML stage
+## The general-subject ML stage
 
 Evaluated against the brief's licence constraints:
 
@@ -67,12 +67,12 @@ Evaluated against the brief's licence constraints:
 | BRIA RMBG-1.4 | **non-commercial** | Ruled out, as flagged. |
 | DeepLabV3 (MediaPipe) | Apache-2.0 | **Measured on our art: bailed 4/6, swiss-cheese mattes.** Trained on photographs; a stylised character is out of distribution. Rejected on quality, not licence. |
 | Selfie segmenter (MediaPipe) | Apache-2.0 | **Shipped** as the lightweight compatibility fallback. |
-| **MODNet via onnxruntime-web** | Apache-2.0 (model), MIT (runtime) | **Shipped for portrait uploads.** Quantized 6.6MB model, cached after first use, with detailed soft alpha around hair and edges. |
-| **U²-Netp via onnxruntime-web** | Apache-2.0 (model), MIT (runtime) | **The recommended next POC.** Salient-object detection generalises to illustration far better than semantic segmentation. ~4.7MB model + ORT wasm. |
+| MODNet via onnxruntime-web | Apache-2.0 (model), MIT (runtime) | **Removed after live testing.** Portrait-only training is the wrong domain for arbitrary PFP artwork. |
+| **U²-Netp via onnxruntime-web** | Apache-2.0 (model), MIT (runtime) | **Shipped.** Salient-object detection handles portraits, products, animals, and illustration rather than requiring a human class. 4.6MB model + ORT wasm. |
 
-Cost of that path: a real dependency and a multi-MB lazy download for two
-collections. Worth prototyping against Claynosaurz + Hot Heads specifically
-before committing — per the brief, judged on our art, not on demos.
+The model is lazy and cached. It adds a 4.6MB first-use download to the shared
+ONNX Runtime, and it was evaluated on real BoDoggos plus a portrait before
+being wired into the common preparation path.
 
 ## When it gets the subject wrong (2026-08-08)
 
@@ -95,9 +95,8 @@ make failure a tap to fix instead of a dead end.**
    deterministic and always reprocesses the untouched artwork, so repeat
    presses cannot compound alpha or silently switch engines.
 
-This does not make a bad cutout good. It makes it recoverable without the
-brush, which is the honest thing we can do before adding a model that
-understands subjects generally (U²-Netp, above).
+This does not make every bad cutout good. It combines a general-subject model,
+a deterministic edge result, the untouched source, and a manual recovery path.
 
 ## Performance / UX properties the brief asked for
 
@@ -108,7 +107,7 @@ understands subjects generally (U²-Netp, above).
 - **Automatic by default**, with a visible **Remove background** button (and
   **Bring back full artwork**) in the mask editor on desktop *and* mobile,
   with undo.
-- **Responsive inference.** ONNX Runtime uses its proxy worker with universal
+- **Responsive inference.** U²-Netp uses ONNX Runtime's proxy worker with universal
   SIMD/WASM and one thread, avoiding cross-origin-isolation requirements on
   GitHub Pages. The existing MediaPipe CPU path is the fallback.
 - **Mobile-safe architecture, not a hardware guarantee.** The WASM path is

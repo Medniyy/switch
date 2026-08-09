@@ -10,7 +10,9 @@ import {
 import { useAppStore } from "@/store/useAppStore";
 import {
   captureAudioConstraints,
+  prepareCaptureAudioSession,
   restorePlaybackAudioSession,
+  webAudioTrackIsUnreliable,
 } from "@/lib/audio";
 
 export type CameraStatus =
@@ -115,6 +117,31 @@ async function getMicrophone() {
       throw error;
     }
     return navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+  }
+}
+
+/**
+ * WebKit variant: camera + microphone in ONE call. iOS runs a single capture
+ * session, so an audio-only request while the camera is live is refused
+ * without the permission prompt ever appearing — which made the mic button
+ * look dead ("tap to retry" on every tap). The caller must release the camera
+ * first; same constraint-retry ladder as getMicrophone.
+ */
+async function getCameraAndMic(video: MediaTrackConstraints) {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      video,
+      audio: captureAudioConstraints(),
+    });
+  } catch (error) {
+    if (
+      permissionWasRefused(error) ||
+      errorName(error) === "NotFoundError" ||
+      needsFreshWebKitSession(error)
+    ) {
+      throw error;
+    }
+    return navigator.mediaDevices.getUserMedia({ video, audio: true });
   }
 }
 
@@ -225,10 +252,17 @@ export function useCameraStream(
   }, [attempt, facing, active, bind, stopCurrentStream]);
 
   /**
-   * Called directly by the mic button. The getUserMedia request begins inside
-   * that tap. It requests audio only and adds the resulting track to the
-   * already-running camera stream, so WebKit does not have to tear down and
-   * reacquire a camera permission/session just to prompt for the microphone.
+   * Called directly by the mic button, so the getUserMedia request begins
+   * inside that tap.
+   *
+   * Two shapes, per platform:
+   * - WebKit (iPhone/iPad/desktop Safari) runs a single capture session, so an
+   *   audio-only request while the camera is live fails WITHOUT showing the
+   *   permission prompt. The camera is released synchronously inside the tap
+   *   and both devices are requested together — the one pattern that reliably
+   *   prompts on iOS.
+   * - Everywhere else, audio is requested alone and the track is added to the
+   *   already-running camera stream, so the preview never flickers.
    */
   const requestMicrophone = useCallback(async () => {
     if (!active || audioStatus === "requesting") return;
@@ -243,6 +277,49 @@ export function useCameraStream(
 
     const operation = ++operationRef.current;
     setAudioStatus("requesting");
+
+    if (webAudioTrackIsUnreliable()) {
+      // WebKit platform test (see lib/audio.ts) — the same engines that run a
+      // single capture session.
+      const video = cameraConstraints(facing);
+      prepareCaptureAudioSession();
+      stopCurrentStream();
+
+      let audioError: unknown = null;
+      try {
+        const stream = await getCameraAndMic(video);
+        if (operation !== operationRef.current || !active) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        useAppStore.getState().setAudioEnabled(true);
+        bind(stream);
+        setAudioStatus(stream.getAudioTracks().length ? "granted" : "error");
+        return;
+      } catch (error) {
+        audioError = error;
+      }
+
+      // The mic failed — bring the camera back so the stage stays usable.
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video,
+          audio: false,
+        });
+        if (operation !== operationRef.current || !active) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        bind(stream);
+      } catch (error) {
+        if (operation !== operationRef.current || !active) return;
+        setAudioStatus("off");
+        setStatus(permissionWasRefused(error) ? "denied" : "error");
+        return;
+      }
+      setAudioStatus(await audioFailureStatus(audioError));
+      return;
+    }
 
     try {
       const microphoneStream = await getMicrophone();
@@ -271,7 +348,7 @@ export function useCameraStream(
       if (operation !== operationRef.current) return;
       setAudioStatus(await audioFailureStatus(error));
     }
-  }, [active, audioStatus, bind]);
+  }, [active, audioStatus, bind, facing, stopCurrentStream]);
 
   const audioEnabled = useAppStore((state) => state.audioEnabled);
   useEffect(() => {

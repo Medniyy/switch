@@ -250,9 +250,10 @@ export function useMediaRecorder(
       const tracks: MediaStreamTrack[] = [...canvasStream.getVideoTracks()];
 
       // Mix in microphone audio when enabled, reusing the track the camera hook
-      // already acquired (mic was prompted up-front, together with the camera, so
-      // it's actually granted here — the old per-record getUserMedia silently
-      // failed on iOS Chrome). If it's missing/blocked, record silently.
+      // already acquired (the on-screen mic button prompted for it inside a user
+      // tap, so it's actually granted here — a per-record getUserMedia at this
+      // point silently failed on iOS Chrome). If it's missing/blocked, record
+      // silently.
       const micTrack = audioTrackRef?.current;
       if (
         useAppStore.getState().audioEnabled &&

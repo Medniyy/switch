@@ -247,9 +247,11 @@ test("the WebKit raw-mic path still records audio", async ({ page }) => {
     });
 
     // Capture the actual constraints handed to WebKit and expose its modern
-    // AudioSession hook. This guards both halves of the low-volume fix: Safari
-    // must not attenuate the raw input through AGC, and preview playback must
-    // leave the quiet play-and-record route after the mic closes.
+    // AudioSession hook. This guards both halves of the level handling: AGC
+    // must stay ON (it is the only level-normaliser available on WebKit,
+    // where the WebAudio boost graph records silence — turning it off is what
+    // made clips barely audible), and preview playback must leave the quiet
+    // play-and-record route after the mic closes.
     Object.defineProperty(navigator, "audioSession", {
       value: { type: "auto" },
       configurable: true,
@@ -280,7 +282,7 @@ test("the WebKit raw-mic path still records audio", async ({ page }) => {
         }
       ).__lastAudioConstraints
   );
-  expect(captureConstraints?.autoGainControl).toBe(false);
+  expect(captureConstraints?.autoGainControl).toBe(true);
 
   const { bytes, b64 } = await recordAndRead(page, 4);
   expect(summarizeMp4(new Uint8Array(bytes)).audio).not.toBeNull();

@@ -24,15 +24,36 @@ export const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
 };
 
 /**
- * WebKit's capture processing can attenuate an otherwise healthy microphone
- * even when AGC reports as enabled. On iPhone/iPad we keep the known-good raw
- * path completely unprocessed; other browsers retain AGC because Android needs
- * it before our recorder-side make-up gain.
+ * The capture profile for EVERY platform, iOS included. An earlier build
+ * special-cased iPhones to `autoGainControl: false` (on a theory that WebKit's
+ * capture processing attenuates the signal even with AGC on), but that build
+ * could never acquire the mic at all, so the raw path was never actually heard
+ * on a device — while AGC-off HAS been heard, and records far too quiet (see
+ * the header comment). On WebKit, AGC is also the ONLY level-normaliser we
+ * have: the recorder-side WebAudio boost graph records as silence there.
  */
 export function captureAudioConstraints(): MediaTrackConstraints {
-  return webAudioTrackIsUnreliable()
-    ? { ...AUDIO_CONSTRAINTS, autoGainControl: false }
-    : AUDIO_CONSTRAINTS;
+  return AUDIO_CONSTRAINTS;
+}
+
+/**
+ * Move iOS into the record-capable audio session BEFORE getUserMedia asks for
+ * the microphone. WebKit switches to it on its own mid-request, but doing it
+ * explicitly inside the user's tap gives AVAudioSession a head start and
+ * avoids the capture-service races that surface as "No
+ * AVAudioSessionCaptureDevice" refusals. Mirrored by
+ * restorePlaybackAudioSession once capture is released.
+ */
+export function prepareCaptureAudioSession(): void {
+  if (typeof navigator === "undefined") return;
+  try {
+    const audioSession = (
+      navigator as Navigator & { audioSession?: { type: string } }
+    ).audioSession;
+    if (audioSession) audioSession.type = "play-and-record";
+  } catch {
+    /* Older Safari versions do not expose AudioSession. */
+  }
 }
 
 /** Return iOS playback to the speaker-oriented session after releasing the mic. */

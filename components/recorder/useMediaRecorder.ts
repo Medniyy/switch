@@ -243,7 +243,7 @@ export function useMediaRecorder(
     } else {
       stoppingRef.current = false;
     }
-  }, [clearTimers, publish, stopMic]);
+  }, [audioTrackRef, clearTimers, publish, stopMic]);
 
   /** Legacy engine: canvas.captureStream + MediaRecorder. */
   const startFallback = useCallback(

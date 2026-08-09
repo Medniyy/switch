@@ -70,6 +70,22 @@ export interface CollectionMeta {
    */
   autoCutout?: boolean;
   /**
+   * Cut this collection's art with the geometric edge matte FIRST, instead of
+   * the general-subject model.
+   *
+   * Set it for art built as a crisp character on a flat designed backdrop —
+   * pixel art especially. The model looks for the salient object and on that
+   * art it reliably answers "the head", amputating the body: measured
+   * 2026-08-10, SMB Gen2 #4 kept 0.206 against the matte's 0.428 (halo and
+   * shirt gone) and SMB Gen3 #6 kept 0.254 against 0.411 (tail and body gone).
+   * The matte's own weakness — soft or low-contrast outlines — is exactly what
+   * this art does not have, so it is the better first choice here.
+   *
+   * Leave it unset for 3D renders, photographs, and painterly art (Claynosaurz,
+   * The Bullpen, Sensei), where the model wins by the same measurement.
+   */
+  preferMatteCutout?: boolean;
+  /**
    * Index the Helius CDN mirror (`content.files[].cdn_uri`) instead of the
    * collection's own image host. Set this when that host is slow enough to hurt:
    * Mad Lads serves ~5.7MB PNGs from an S3 bucket that regularly needs 90s+,
@@ -95,6 +111,7 @@ export const COLLECTIONS: CollectionMeta[] = [
     tag: "SMB Gen2",
     chain: "solana",
     accent: "#FEC133",
+    preferMatteCutout: true,
     fetch: {
       via: "helius",
       meSymbol: "solana_monkey_business",
@@ -107,6 +124,7 @@ export const COLLECTIONS: CollectionMeta[] = [
     tag: "SMB Gen3",
     chain: "solana",
     accent: "#FEC133",
+    preferMatteCutout: true,
     fetch: {
       via: "helius",
       meSymbol: "smb_gen3",
@@ -123,6 +141,7 @@ export const COLLECTIONS: CollectionMeta[] = [
     // roster — every other collection lands in under 2s, this one often doesn't
     // finish at all. Index the CDN mirror instead.
     preferCdn: true,
+    preferMatteCutout: true,
     fetch: { via: "helius", meSymbol: "mad_lads" },
   },
   {
@@ -272,6 +291,28 @@ export function getCollection(id: string): CollectionMeta | undefined {
 export function usesAutoCutout(id: string | null | undefined): boolean {
   if (!id) return true;
   return getCollection(id)?.autoCutout !== false;
+}
+
+/**
+ * Whether this collection's art should be cut with the general-subject model
+ * first (the default) or with the geometric matte first. See
+ * `preferMatteCutout` for the measurements behind each choice. Unknown ids —
+ * and custom uploads, which pass no id — get the model, its training domain.
+ */
+export function prefersSegmenterCutout(id: string | null | undefined): boolean {
+  if (!id) return true;
+  return getCollection(id)?.preferMatteCutout !== true;
+}
+
+/**
+ * Whether this source is collection ARTWORK — a character on a designed
+ * backdrop — rather than a photograph a user supplied. Only artwork may use
+ * `collapseGuard`, because only there is the geometric matte a meaningful
+ * second opinion. Custom avatars carry a collection id too, so an unknown id
+ * is not enough on its own to answer this.
+ */
+export function isCollectionArtwork(id: string | null | undefined): boolean {
+  return !!id && !!getCollection(id);
 }
 
 /**

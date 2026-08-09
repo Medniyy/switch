@@ -94,6 +94,31 @@ test("live loop draws per frame but never allocates/segments/re-encodes", async 
     undefined,
     { timeout: 20_000 }
   );
+
+  // Then wait for MOUNTING to settle before arming the measurement. React is
+  // still committing the live stage for a moment after the two canvases first
+  // appear, and a canvas allocated by that one-time commit says nothing about
+  // the per-frame cost this test exists to prove. Arming on "no canvas has been
+  // created for 500ms" measures the steady state the docblock describes, and
+  // stops a few milliseconds of unrelated timing drift from deciding the result.
+  await page.waitForFunction(
+    () => {
+      const w = window as unknown as {
+        __counts: Record<string, number>;
+        __seen?: number;
+        __still?: number;
+      };
+      if (w.__seen === w.__counts.createCanvas) w.__still = (w.__still ?? 0) + 1;
+      else {
+        w.__seen = w.__counts.createCanvas;
+        w.__still = 0;
+      }
+      return (w.__still ?? 0) >= 5;
+    },
+    undefined,
+    { timeout: 20_000, polling: 100 }
+  );
+
   await page.evaluate(() => {
     const w = window as unknown as { __counts: Record<string, number>; __t0: number };
     for (const k of Object.keys(w.__counts)) w.__counts[k] = 0;

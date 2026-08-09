@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { removeBackground } from "@/lib/removeBackground";
 import { computeSubjectMatte } from "@/lib/subjectMatte";
 import { prepareArtwork } from "@/lib/prepareArtwork";
+import { prefersSegmenterCutout } from "@/lib/collections";
 
 /**
  * Dev/test-only seam exposing the cutout pipeline on `window.__switchCutout`,
@@ -20,6 +21,9 @@ export function CutoutSeam() {
       removeBackground,
       computeSubjectMatte,
       prepareArtwork,
+      // Exposed so the harness measures the SAME engine order the app uses,
+      // rather than re-deriving the routing and drifting from it.
+      prefersSegmenterCutout,
     };
   }, []);
   return null;

@@ -74,7 +74,8 @@ export function NumberPickSheet({
   );
   const { image: cutout, settled } = useCutoutImage(
     rawImage,
-    !savedImage && usesAutoCutout(result?.collection)
+    !savedImage && usesAutoCutout(result?.collection),
+    result?.collection
   );
   const effective = savedImage ?? cutout;
   const artFailed = !savedImage && rawStatus === "error";

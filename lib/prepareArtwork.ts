@@ -149,6 +149,19 @@ export interface PrepareOptions {
   preferSegmenter?: boolean;
   /** Crop to the subject once its background is gone. */
   crop?: boolean;
+  /**
+   * Let a collapsed result hand the lead to the other engine (see
+   * COLLAPSE_RATIO). ARTWORK ONLY, and off by default.
+   *
+   * The guard compares the two engines' coverage, which is only meaningful
+   * when both are plausible readings of the same image. On a PHOTOGRAPH they
+   * are not: the geometric matte has no flat backdrop to walk in from, so it
+   * keeps most of the frame and scores high precisely BECAUSE it failed, while
+   * a correct model cutout of one person in a room legitimately scores low.
+   * Enabling this for uploads would hand users back the background they came
+   * here to remove.
+   */
+  collapseGuard?: boolean;
   /** Honest progress from the on-device general-subject engine. */
   onSegmenterProgress?: (progress: SubjectCutoutProgress) => void;
 }
@@ -157,12 +170,37 @@ export interface PrepareOptions {
 const LOW_COVERAGE = 0.1;
 const HIGH_COVERAGE = 0.9;
 
+/**
+ * When the leading candidate keeps less than this fraction of what the other
+ * engine kept, it has amputated the subject rather than cut it out.
+ *
+ * This is a RELATIVE comparison of two results for the SAME image, which is
+ * why it succeeds where the old absolute quality gate failed: it never has to
+ * answer "is this cutout good", only "did one engine lose most of what the
+ * other found". Measured across the live roster (2026-08-10), one token each:
+ *
+ *   Sensei #22   model 0.136 vs matte 0.491 → swaps, and the model really had
+ *                kept nothing but the panda's face (hat and robe erased).
+ *   Hot Heads #4 model 0.166 vs matte 0.650 → swaps; the model drops the body.
+ *   Sensei #4    model 0.588 vs matte 0.416 → no swap (model is the good one).
+ *   Claynosaurz  model 0.377 vs matte 0.145 → no swap (matte is the broken one).
+ *   Lil Pudgys   model 0.161 vs matte 0.162 → no swap; a small character in a
+ *                big frame is legitimately low coverage, and half of 0.162 is
+ *                far below it. An absolute floor would have misfired here.
+ *
+ * Known limit: VeeFriends (hidden) is a photograph whose matte keeps the
+ * background, so a swap there would pick the worse result. Re-measure before
+ * un-hiding it.
+ */
+const COLLAPSE_RATIO = 0.5;
+
 export async function prepareArtwork(
   source: HTMLImageElement | HTMLCanvasElement,
   {
     allowSegmenter = true,
     preferSegmenter = false,
     crop = true,
+    collapseGuard = false,
     onSegmenterProgress,
   }: PrepareOptions = {}
 ): Promise<PreparedArtwork> {
@@ -192,6 +230,17 @@ export async function prepareArtwork(
           ...preferred.slice(firstPlausible + 1),
         ]
       : preferred;
+
+  // Both candidates can look individually plausible while one of them has
+  // quietly cut the character in half — the coverage band above only catches
+  // a result that kept almost nothing at all. Compare them against each other.
+  if (
+    collapseGuard &&
+    ordered.length > 1 &&
+    ordered[0].coverage < COLLAPSE_RATIO * ordered[1].coverage
+  ) {
+    [ordered[0], ordered[1]] = [ordered[1], ordered[0]];
+  }
 
   const plain = toCanvas(source);
   if (plain) {

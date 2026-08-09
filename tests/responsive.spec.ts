@@ -10,10 +10,17 @@ async function reachChoice(page: Page) {
 
 async function openEditor(page: Page) {
   await page.getByRole("button", { name: "Customize it" }).click();
+  // Ready = the edit canvas exists and has been sized. Its actual side is an
+  // implementation detail of whichever cutout engine led (the model renders at
+  // its own resolution, the matte at the artwork's), so pinning an exact number
+  // here only breaks the layout tests whenever that routing changes.
   await page.waitForFunction(
     () =>
-      (window as unknown as { __switchMaskEditor?: { getEditCanvas: () => HTMLCanvasElement | null } })
-        .__switchMaskEditor?.getEditCanvas()?.width === 300,
+      ((
+        window as unknown as {
+          __switchMaskEditor?: { getEditCanvas: () => HTMLCanvasElement | null };
+        }
+      ).__switchMaskEditor?.getEditCanvas()?.width ?? 0) > 0,
     undefined,
     { timeout: 20_000 }
   );

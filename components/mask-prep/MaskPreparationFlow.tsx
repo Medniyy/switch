@@ -45,7 +45,11 @@ import {
   type MaskMode,
   type SavedUserMask,
 } from "@/lib/userMasks";
-import { usesAutoCutout } from "@/lib/collections";
+import {
+  isCollectionArtwork,
+  prefersSegmenterCutout,
+  usesAutoCutout,
+} from "@/lib/collections";
 import { prepareArtwork } from "@/lib/prepareArtwork";
 import { MASK_SOURCE_WIDTH } from "@/lib/imageSrc";
 import { useHeadMask } from "@/components/ar/useHeadMask";
@@ -349,6 +353,7 @@ export function MaskPreparationFlow({
               artworkImage={starting.artworkImage}
               placement={starting.placement}
               source={starting.source}
+              collectionId={nft.collection}
               initialMaskFlip={existingRecord?.maskFlip ?? false}
               initialFit={
                 existingRecord
@@ -499,12 +504,15 @@ function useStartingMask(
     setAutoStatus("processing");
     const frame = window.requestAnimationFrame(async () => {
       try {
-        // Prefer the general-subject engine for the first result. The geometric
-        // matte is fast, but on dark or detailed art it can walk through the
-        // character itself. U²-Netp handles people, animals, products, and PFP
-        // artwork; prepareArtwork still keeps the edge matte as a fallback.
+        // Which engine leads depends on the art (see prefersSegmenterCutout).
+        // The general-subject model handles 3D renders, photographs and
+        // painterly art, where the geometric matte can walk through a dark or
+        // soft-edged character; the matte leads for crisp pixel art on a flat
+        // backdrop, where the model reads the head as the whole subject and
+        // drops the body. Whichever loses is still kept as the fallback.
         const prepared = await prepareArtwork(rawImage, {
-          preferSegmenter: true,
+          preferSegmenter: prefersSegmenterCutout(nft.collection),
+          collapseGuard: isCollectionArtwork(nft.collection),
         });
         const canvas = prepared.via === "original" ? null : prepared.canvas;
         const img = canvas
@@ -815,6 +823,7 @@ function MaskPrepEditor({
   artworkImage,
   placement,
   source,
+  collectionId,
   initialMaskFlip,
   initialFit,
   videoRef,
@@ -828,6 +837,8 @@ function MaskPrepEditor({
   artworkImage: HTMLImageElement | null;
   placement: MaskPlacement | null;
   source: StartSource;
+  /** Chooses which cutout engine leads — see prefersSegmenterCutout. */
+  collectionId: string | null;
   initialMaskFlip: boolean;
   initialFit: MaskFit;
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -1168,12 +1179,14 @@ function MaskPrepEditor({
             return snapshot;
           })();
 
-      // This is deliberately deterministic. The general-subject model handles
-      // both portraits and PFP artwork; prepareArtwork falls back to the edge
-      // matte only when the model fails or returns implausible coverage.
+      // This is deliberately deterministic, and leads with the same engine
+      // automatic preparation chose for this art, so pressing the button can
+      // never quietly hand back a different-looking cutout than the one the
+      // user already saw.
       const prepared = await prepareArtwork(source, {
         crop: false,
-        preferSegmenter: true,
+        preferSegmenter: prefersSegmenterCutout(collectionId),
+        collapseGuard: isCollectionArtwork(collectionId),
       });
       if (prepared.via === "original") {
         setCutMessage(
@@ -2008,20 +2021,29 @@ function MobileToolbar({
 
       {/* Row B — Brush size / Preview / More + Save */}
       <div className="mt-2 flex items-stretch gap-2">
+        {/* The brush label is the one flexible thing in this row: it may shrink
+            and clip so the Save action never can. At 320px the row is only just
+            wide enough. */}
         <button
           onClick={onOpenBrush}
-          className="flex h-12 items-center gap-2 rounded-full border border-cream/12 bg-white/5 px-4 text-sm text-cream/85 transition-colors hover:bg-white/10 active:scale-95"
+          className="flex h-12 min-w-0 shrink items-center gap-2 rounded-full border border-cream/12 bg-white/5 px-4 text-sm text-cream/85 transition-colors hover:bg-white/10 active:scale-95"
         >
-          <Circle size={13} strokeWidth={2.5} />
-          Brush · {brushPx}px
+          <Circle size={13} strokeWidth={2.5} className="shrink-0" />
+          <span className="truncate">Brush · {brushPx}px</span>
         </button>
         {showPreview && (
           <MobileIcon onClick={onTogglePreview} active={previewing} label="Preview" icon={<Eye size={18} strokeWidth={2.5} />} />
         )}
         <MobileIcon onClick={onOpenMore} label="More options" icon={<SlidersHorizontal size={18} strokeWidth={2.5} />} />
-        <PixelButton onClick={onSave} disabled={saving} className="min-h-12 flex-1">
+        {/* Just "Save": the two extra words pushed this button past the right
+            edge of a 320px phone, where it could no longer be tapped at all. */}
+        <PixelButton
+          onClick={onSave}
+          disabled={saving}
+          className="min-h-12 flex-1 shrink-0 whitespace-nowrap"
+        >
           <Check size={16} strokeWidth={3} />
-          {saving ? "Saving..." : "Save avatar"}
+          {saving ? "Saving..." : "Save"}
         </PixelButton>
       </div>
     </div>

@@ -270,7 +270,8 @@ export function PhotoEditor({
   const { image: initRaw } = useNFTImage(useLegacy ? initialNFT?.image : undefined);
   const { image: initCutout } = useCutoutImage(
     initRaw,
-    useLegacy && usesAutoCutout(initialNFT?.collection)
+    useLegacy && usesAutoCutout(initialNFT?.collection),
+    initialNFT?.collection
   );
   const initImage =
     initialMaskImage ??

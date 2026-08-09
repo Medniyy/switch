@@ -296,7 +296,7 @@ test("custom avatar gets the full mobile editor before and after wearing", async
   await expect(page.getByText(/ERASE — paint over/i)).toBeVisible();
   await expect(page.getByRole("button", { name: /^Brush ·/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "More options" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Save avatar" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
 
   // Restore must recover the missing region from the untouched upload, not
   // from the transparent accepted cutout.
@@ -327,7 +327,7 @@ test("custom avatar gets the full mobile editor before and after wearing", async
   await expect(page.getByRole("button", { name: /Bring back full artwork/i })).toBeVisible();
   await page.getByRole("button", { name: "Close" }).last().click();
 
-  await page.getByRole("button", { name: "Save avatar" }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await page.waitForURL(/\/record/, { timeout: 30_000 });
   await page.getByRole("button", { name: "Edit mask" }).click();
   await page.waitForFunction(
@@ -346,7 +346,7 @@ test("custom avatar gets the full mobile editor before and after wearing", async
     page.getByRole("button", { name: "Preview", exact: true })
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "More options" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Save avatar" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
 });
 
 test("the gallery offers the create-your-own card", async ({ page }) => {

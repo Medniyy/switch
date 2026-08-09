@@ -2,6 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { prepareArtwork } from "@/lib/prepareArtwork";
+import {
+  isCollectionArtwork,
+  prefersSegmenterCutout,
+} from "@/lib/collections";
 
 export interface CutoutResult {
   /** The image to draw: the cutout once ready, or the original as a fallback. */
@@ -24,7 +28,9 @@ export interface CutoutResult {
  */
 export function useCutoutImage(
   raw: HTMLImageElement | null,
-  enabled: boolean
+  enabled: boolean,
+  /** Chooses which engine leads for this art — see prefersSegmenterCutout. */
+  collectionId?: string | null
 ): CutoutResult {
   const [result, setResult] = useState<CutoutResult>({
     image: null,
@@ -48,7 +54,10 @@ export function useCutoutImage(
     const run = async () => {
       let canvas: HTMLCanvasElement | null = null;
       try {
-        const prepared = await prepareArtwork(raw, { preferSegmenter: true });
+        const prepared = await prepareArtwork(raw, {
+          preferSegmenter: prefersSegmenterCutout(collectionId),
+          collapseGuard: isCollectionArtwork(collectionId),
+        });
         canvas = prepared.via === "original" ? null : prepared.canvas;
       } catch {
         canvas = null; // tainted/undecodable — degrade to the original below

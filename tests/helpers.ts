@@ -12,6 +12,31 @@ export interface TestNFT {
  * Navigate to the recorder and wait until the dev-only store seam is available.
  * The recorder route uses trailing slashes (next.config trailingSlash: true).
  */
+/**
+ * Keep Next.js's dev-only error overlay from swallowing taps.
+ *
+ * Every page in dev raises its issue badge here, because a missing
+ * `public/masks/<collection>/index.json` is how useHeadMask asks "does this
+ * collection have precomputed masks" — a 404 is the intended answer, and the
+ * offline pipeline's output is not shipped, so it is the answer for all of
+ * them. The badge sits bottom-left, exactly where the editor's toolbar lives
+ * on a phone viewport, and `<nextjs-portal>` then intercepts the pointer
+ * events aimed at Brush and Save. None of it exists in a production build.
+ *
+ * Applied through `adoptedStyleSheets` rather than `page.addStyleTag`, and only
+ * once the app is up. addStyleTag appends a <style> node to <head> mid-hydration,
+ * which React treats as a mismatch and answers by re-rendering the tree — that
+ * remounts the live canvases and made perf.spec (rightly) report allocation in
+ * its steady-state window. A constructed stylesheet adds no DOM node at all.
+ */
+export async function hideDevOverlay(page: Page) {
+  await page.evaluate(() => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync("nextjs-portal { display: none !important; }");
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+  });
+}
+
 export async function gotoRecord(page: Page) {
   await page.goto("/record/");
   await page.waitForFunction(
@@ -20,6 +45,7 @@ export async function gotoRecord(page: Page) {
     undefined,
     { timeout: 30_000 }
   );
+  await hideDevOverlay(page);
 }
 
 /**

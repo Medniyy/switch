@@ -147,9 +147,10 @@ async function getCameraAndMic(video: MediaTrackConstraints) {
 
 /**
  * Owns the live camera/microphone stream and exposes explicit recovery for the
- * on-screen mic control. Camera starts by itself. Microphone access is requested
- * only by the mic button, keeping iOS's permission request directly inside the
- * user's tap and avoiding a second competing camera capture session.
+ * on-screen mic control. Camera and microphone are requested TOGETHER at boot
+ * (one prompt, sound on by default — like the native camera app); if only the
+ * audio half fails, the camera still comes up and the mic button carries the
+ * precise failure state plus the recovery path.
  *
  * `active` releases capture while a result or editor is on screen. This returns
  * mobile playback to the speaker route and avoids Android volume ducking.
@@ -223,9 +224,29 @@ export function useCameraStream(
 
     const video = cameraConstraints(facing);
     setStatus("requesting");
-    setAudioStatus("off");
+    setAudioStatus("requesting");
 
     void (async () => {
+      // Camera-app behavior: ONE prompt for camera + microphone together, and
+      // sound is on from the very first frame — nobody should have to find a
+      // mic button before their clip records audio. If audio is what fails,
+      // fall back to camera alone so the stage still comes up, and surface the
+      // real failure on the mic button (which owns recovery).
+      let audioError: unknown = null;
+      try {
+        prepareCaptureAudioSession();
+        const stream = await getCameraAndMic(video);
+        if (cancelled || operation !== operationRef.current) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        bind(stream);
+        setAudioStatus(stream.getAudioTracks().length ? "granted" : "error");
+        return;
+      } catch (error) {
+        audioError = error;
+      }
+
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video,
@@ -236,6 +257,9 @@ export function useCameraStream(
           return;
         }
         bind(stream);
+        const failure = await audioFailureStatus(audioError);
+        if (cancelled || operation !== operationRef.current) return;
+        setAudioStatus(failure);
       } catch (error) {
         if (cancelled || operation !== operationRef.current) return;
         setAudioStatus("off");

@@ -36,11 +36,7 @@ async function liveVideoStage(page: Page) {
   const keepWhole = page.getByRole("button", { name: /keep it whole/i });
   await keepWhole.waitFor({ state: "visible", timeout: 30_000 });
   await keepWhole.click();
-  // Microphone permission is intentionally user-triggered on iOS. The camera
-  // starts alone; the on-screen mic button owns the audio request.
-  const connectMic = page.getByRole("button", { name: "CONNECT MIC" });
-  await expect(connectMic).toBeVisible();
-  await connectMic.click();
+  // Camera and mic are requested together at boot — sound is on with no tap.
   await expect(page.getByRole("button", { name: "MIC ON" })).toBeVisible();
 }
 

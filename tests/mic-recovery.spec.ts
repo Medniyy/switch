@@ -3,6 +3,16 @@ import { gotoRecord, selectNFT } from "./helpers";
 
 const NFT = { id: 71, collection: "mic-recovery", name: "Mic Check" };
 
+/** Shape of every getUserMedia call, recorded by the stubs below. */
+type GumCall = { audio: boolean; video: boolean };
+
+declare global {
+  interface Window {
+    __micCalls: GumCall[];
+    __audioFail?: boolean;
+  }
+}
+
 async function openLiveStage(page: Page) {
   await page.setViewportSize({ width: 390, height: 844 });
   await gotoRecord(page);
@@ -12,58 +22,84 @@ async function openLiveStage(page: Page) {
   await keepWhole.click();
 }
 
-test("the mic button requests audio only and keeps the camera session", async ({
-  page,
-}) => {
-  await page.addInitScript(() => {
+function readCalls(page: Page) {
+  return page.evaluate(() => window.__micCalls);
+}
+
+/**
+ * Record every getUserMedia call; audio-carrying requests fail for the first
+ * `failAudioTimes` calls, and keep failing while `window.__audioFail` is set.
+ */
+function installGumRecorder(options?: {
+  failAudioTimes?: number;
+  failAudioWith?: { message: string; name: string };
+}) {
+  const { failAudioTimes = 0, failAudioWith } = options ?? {};
+  return `(() => {
     const realGetUserMedia = navigator.mediaDevices.getUserMedia.bind(
       navigator.mediaDevices
     );
-    const calls: Array<{ audio: boolean; video: boolean }> = [];
-    (
-      window as unknown as {
-        __micCalls: Array<{ audio: boolean; video: boolean }>;
-      }
-    ).__micCalls = calls;
-    let preferredAudioFailed = false;
+    window.__micCalls = [];
+    let audioFailuresLeft = ${failAudioTimes};
     navigator.mediaDevices.getUserMedia = async (constraints) => {
-      calls.push({
-        audio: !!constraints?.audio,
-        video: !!constraints?.video,
+      window.__micCalls.push({
+        audio: !!(constraints && constraints.audio),
+        video: !!(constraints && constraints.video),
       });
       if (
-        constraints?.audio &&
-        !constraints.video &&
-        typeof constraints.audio === "object" &&
-        !preferredAudioFailed
+        constraints &&
+        constraints.audio &&
+        (audioFailuresLeft > 0 || window.__audioFail)
       ) {
-        preferredAudioFailed = true;
-        throw new DOMException("Temporary capture failure", "AbortError");
+        audioFailuresLeft -= 1;
+        throw new DOMException(
+          ${JSON.stringify(
+            failAudioWith?.message ?? "Failed starting capture of an audio track"
+          )},
+          ${JSON.stringify(failAudioWith?.name ?? "NotReadableError")}
+        );
       }
       return realGetUserMedia(constraints);
     };
-  });
+  })()`;
+}
+
+test("camera and mic connect together at startup — one prompt, no tap", async ({
+  page,
+}) => {
+  await page.addInitScript(installGumRecorder());
 
   await openLiveStage(page);
 
-  const connectMic = page.getByRole("button", { name: "CONNECT MIC" });
-  await expect(connectMic).toBeVisible();
-  await connectMic.click();
-
+  // Sound is on from the very first frame, like the native camera app — the
+  // user never has to find a button before their clip records audio.
   await expect(page.getByRole("button", { name: "MIC ON" })).toBeVisible();
-  const calls = await page.evaluate(
-    () =>
-      (
-        window as unknown as {
-          __micCalls: Array<{ audio: boolean; video: boolean }>;
-        }
-      ).__micCalls
-  );
-  expect(calls.filter((call) => call.video).length).toBe(1);
-  expect(calls.filter((call) => call.audio).length).toBe(2);
-  expect(calls.filter((call) => call.audio).every((call) => !call.video)).toBe(
-    true
-  );
+
+  const calls = await readCalls(page);
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toEqual({ audio: true, video: true });
+});
+
+test("a boot-time audio failure keeps the camera and the mic button recovers audio-only", async ({
+  page,
+}) => {
+  // Fail the boot's combined request AND its audio:true retry, then let audio
+  // work again so the on-screen button can repair it without a reload.
+  await page.addInitScript(installGumRecorder({ failAudioTimes: 2 }));
+
+  await openLiveStage(page);
+
+  // The camera must still be live, with the true failure on the mic button.
+  await expect(page.getByText("TAP TO RETRY MIC")).toBeVisible();
+
+  await page.getByRole("button", { name: "RETRY MIC" }).click();
+  await expect(page.getByRole("button", { name: "MIC ON" })).toBeVisible();
+
+  const calls = await readCalls(page);
+  // Recovery on Chromium is audio-only: the camera session is never torn down.
+  expect(calls.at(-1)).toEqual({ audio: true, video: false });
+  // combined boot, its audio:true retry, then the camera-only fallback.
+  expect(calls.filter((call) => call.video).length).toBe(3);
 });
 
 test.describe("on iOS (WebKit single capture session)", () => {
@@ -76,52 +112,35 @@ test.describe("on iOS (WebKit single capture session)", () => {
       "Mobile/15E148 Safari/604.1",
   });
 
-  test("the mic tap releases the camera and requests both devices in one call", async ({
+  test("iOS boots with camera and mic in one call and never asks audio-only", async ({
     page,
   }) => {
-    await page.addInitScript(() => {
-      const realGetUserMedia = navigator.mediaDevices.getUserMedia.bind(
-        navigator.mediaDevices
-      );
-      const calls: Array<{ audio: boolean; video: boolean }> = [];
-      (
-        window as unknown as {
-          __micCalls: Array<{ audio: boolean; video: boolean }>;
-        }
-      ).__micCalls = calls;
-      navigator.mediaDevices.getUserMedia = async (constraints) => {
-        calls.push({
-          audio: !!constraints?.audio,
-          video: !!constraints?.video,
-        });
-        // Reproduce the iOS failure that shipped: an audio-only request while
-        // another capture is live is refused without any permission prompt.
-        if (constraints?.audio && !constraints.video) {
-          throw new DOMException(
-            "Failed starting capture of an audio track",
-            "NotReadableError"
-          );
-        }
-        return realGetUserMedia(constraints);
-      };
-    });
+    await page.addInitScript(installGumRecorder());
 
     await openLiveStage(page);
-
-    await page.getByRole("button", { name: "CONNECT MIC" }).click();
     await expect(page.getByRole("button", { name: "MIC ON" })).toBeVisible();
 
-    const calls = await page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __micCalls: Array<{ audio: boolean; video: boolean }>;
-          }
-        ).__micCalls
-    );
-    // No audio-only request may ever be issued on iOS — it cannot prompt.
+    const calls = await readCalls(page);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({ audio: true, video: true });
+  });
+
+  test("iOS mic recovery releases the camera and re-requests both devices together", async ({
+    page,
+  }) => {
+    // Boot's combined request and its audio:true retry fail, then audio works.
+    await page.addInitScript(installGumRecorder({ failAudioTimes: 2 }));
+
+    await openLiveStage(page);
+    await expect(page.getByText("TAP TO RETRY MIC")).toBeVisible();
+
+    await page.getByRole("button", { name: "RETRY MIC" }).click();
+    await expect(page.getByRole("button", { name: "MIC ON" })).toBeVisible();
+
+    const calls = await readCalls(page);
+    // An audio-only request can never prompt on iOS — it must not be issued.
     expect(calls.filter((call) => call.audio && !call.video)).toHaveLength(0);
-    // The tap's request carries BOTH devices, after the camera-only boot call.
+    // The tap's request carries BOTH devices.
     expect(calls.at(-1)).toEqual({ audio: true, video: true });
   });
 });
@@ -129,23 +148,16 @@ test.describe("on iOS (WebKit single capture session)", () => {
 test("an ambiguous WebKit refusal is not falsely called blocked", async ({
   page,
 }) => {
+  await page.addInitScript(
+    installGumRecorder({
+      failAudioWith: { message: "Permission denied", name: "NotAllowedError" },
+    })
+  );
   await page.addInitScript(() => {
-    const realGetUserMedia = navigator.mediaDevices.getUserMedia.bind(
-      navigator.mediaDevices
-    );
-    navigator.mediaDevices.getUserMedia = async (constraints) => {
-      if (constraints?.audio && !constraints.video) {
-        throw new DOMException("Permission denied", "NotAllowedError");
-      }
-      return realGetUserMedia(constraints);
-    };
+    window.__audioFail = true;
   });
 
   await openLiveStage(page);
-
-  const connectMic = page.getByRole("button", { name: "CONNECT MIC" });
-  await expect(connectMic).toBeVisible();
-  await connectMic.click();
 
   await expect(page.getByRole("button", { name: "ALLOW MIC" })).toBeVisible();
   await expect(page.getByText("TAP TO CONNECT MIC")).toBeVisible();
@@ -153,16 +165,13 @@ test("an ambiguous WebKit refusal is not falsely called blocked", async ({
 });
 
 test("a confirmed site-level denial is called blocked", async ({ page }) => {
+  await page.addInitScript(
+    installGumRecorder({
+      failAudioWith: { message: "Permission denied", name: "NotAllowedError" },
+    })
+  );
   await page.addInitScript(() => {
-    const realGetUserMedia = navigator.mediaDevices.getUserMedia.bind(
-      navigator.mediaDevices
-    );
-    navigator.mediaDevices.getUserMedia = async (constraints) => {
-      if (constraints?.audio && !constraints.video) {
-        throw new DOMException("Permission denied", "NotAllowedError");
-      }
-      return realGetUserMedia(constraints);
-    };
+    window.__audioFail = true;
     const realQuery = navigator.permissions.query.bind(navigator.permissions);
     navigator.permissions.query = async (descriptor) => {
       if (descriptor.name === ("microphone" as PermissionName)) {
@@ -180,7 +189,6 @@ test("a confirmed site-level denial is called blocked", async ({ page }) => {
   });
 
   await openLiveStage(page);
-  await page.getByRole("button", { name: "CONNECT MIC" }).click();
 
   await expect(
     page.getByRole("button", {
@@ -193,24 +201,19 @@ test("a confirmed site-level denial is called blocked", async ({ page }) => {
 test("an iOS audio-session reset offers recovery instead of blaming permission", async ({
   page,
 }) => {
+  await page.addInitScript(
+    installGumRecorder({
+      failAudioWith: {
+        message: "No AVAudioSessionCaptureDevice",
+        name: "NotAllowedError",
+      },
+    })
+  );
   await page.addInitScript(() => {
-    const realGetUserMedia = navigator.mediaDevices.getUserMedia.bind(
-      navigator.mediaDevices
-    );
-    navigator.mediaDevices.getUserMedia = async (constraints) => {
-      if (constraints?.audio && !constraints.video) {
-        throw new DOMException(
-          "No AVAudioSessionCaptureDevice",
-          "NotAllowedError"
-        );
-      }
-      return realGetUserMedia(constraints);
-    };
+    window.__audioFail = true;
   });
 
   await openLiveStage(page);
-
-  await page.getByRole("button", { name: "CONNECT MIC" }).click();
 
   await expect(
     page.getByRole("button", { name: "RELOAD TO RESTORE MIC" })

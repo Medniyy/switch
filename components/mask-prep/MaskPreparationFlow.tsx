@@ -23,6 +23,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -35,7 +36,6 @@ import {
   blobToImage,
   exportTransparentCanvas,
   loadImage,
-  loadSavedMask,
   MY_AVATARS,
   nftMaskKey,
   saveUserMask,
@@ -117,6 +117,14 @@ const DEFAULT_FIT: MaskFit = {
   anchorOffsetY: 0,
   scaleOffset: 0,
 };
+
+/** Travel is relative to the rendered mask width. */
+const FIT_RANGE = {
+  x: 0.75,
+  y: 1.25,
+  scaleMin: -0.65,
+  scaleMax: 3,
+} as const;
 
 const BRUSH_PRESETS: Record<BrushPreset, number> = {
   small: 0.026,
@@ -232,12 +240,10 @@ export function MaskPreparationFlow({
         version: USER_MASK_VERSION,
       };
 
-      let persisted = true;
       try {
         await saveUserMask(record);
         onComplete({ record, image, persisted: true });
       } catch {
-        persisted = false;
         const warning =
           "Saved for this session. Browser storage is full or unavailable, so you may need to prepare it again next time.";
         setStorageWarning(warning);
@@ -830,9 +836,12 @@ function MaskPrepEditor({
   onComplete: (payload: EditorCompletePayload) => Promise<void> | void;
 }) {
   const visibleCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const originalCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const editCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // The restore source and the state the editor opened with are deliberately
+  // separate. For a custom upload, Restore must paint pixels from the untouched
+  // source photo, while Reset must return to the accepted automatic cutout.
   const originalDataRef = useRef<ImageData | null>(null);
+  const resetDataRef = useRef<ImageData | null>(null);
   const editDataRef = useRef<ImageData | null>(null);
   const historyRef = useRef<ImageData[]>([]);
   const redoRef = useRef<ImageData[]>([]);
@@ -905,15 +914,25 @@ function MaskPrepEditor({
   }, []);
 
   useEffect(() => {
-    const original = makeSquareCanvas(seedImage);
-    const edit = makeSquareCanvas(initialImage, original.width);
-    const octx = original.getContext("2d", { willReadFrequently: true });
+    const seed = makeSquareCanvas(seedImage);
+    const edit = makeSquareCanvas(initialImage, seed.width);
+    // Automatic cutouts are intentionally transparent. Pointing Restore at
+    // that cutout made the button appear to work while missing pixels stayed
+    // missing. Use the retained source artwork whenever it is available.
+    const restoreSource = makeSquareCanvas(artworkImage ?? seedImage, edit.width);
+    const octx = restoreSource.getContext("2d", { willReadFrequently: true });
     const ectx = edit.getContext("2d", { willReadFrequently: true });
     if (!octx || !ectx) return;
-    originalCanvasRef.current = original;
     editCanvasRef.current = edit;
-    originalDataRef.current = octx.getImageData(0, 0, original.width, original.height);
-    editDataRef.current = ectx.getImageData(0, 0, edit.width, edit.height);
+    originalDataRef.current = octx.getImageData(
+      0,
+      0,
+      restoreSource.width,
+      restoreSource.height
+    );
+    const initialData = ectx.getImageData(0, 0, edit.width, edit.height);
+    resetDataRef.current = cloneImageData(initialData);
+    editDataRef.current = initialData;
     historyRef.current = [];
     redoRef.current = [];
     setImageSide(Math.min(edit.width, edit.height));
@@ -922,7 +941,7 @@ function MaskPrepEditor({
     setDirty(false);
     setPreviewImage(initialImage);
     setViewVersion((v) => v + 1);
-  }, [seedImage, initialImage]);
+  }, [seedImage, initialImage, artworkImage]);
 
   const render = useCallback(() => {
     const visible = visibleCanvasRef.current;
@@ -1085,7 +1104,7 @@ function MaskPrepEditor({
 
   const reset = () => {
     if (dirty && !window.confirm("Reset your mask?")) return;
-    const original = originalDataRef.current;
+    const original = resetDataRef.current;
     const editCanvas = editCanvasRef.current;
     const ctx = editCanvas?.getContext("2d", { willReadFrequently: true });
     if (!original || !editCanvas || !ctx) return;
@@ -1107,9 +1126,8 @@ function MaskPrepEditor({
    * the character — or, for collections with `autoCutout: false`, simply the way
    * back after experimenting.
    *
-   * It also re-points the RESTORE brush at the full artwork: the brush paints
-   * from `originalDataRef`, so without this the user could erase background but
-   * never paint any of it back.
+   * The RESTORE brush already points at this untouched artwork whenever the
+   * source Blob is available. This action fills the whole canvas in one step.
    *
    * The artwork is drawn into the EXISTING canvas size rather than its own. Undo
    * snapshots are ImageData at the current dimensions, so resizing here would
@@ -1209,7 +1227,6 @@ function MaskPrepEditor({
     if (historyRef.current.length > MAX_UNDO) historyRef.current.shift();
     redoRef.current = [];
 
-    originalCanvasRef.current = full;
     originalDataRef.current = cloneImageData(data);
     editDataRef.current = data;
     ctx.putImageData(data, 0, 0);
@@ -1486,8 +1503,16 @@ function MaskPrepEditor({
           />
           {hintVisible && (
             <div className="pointer-events-none absolute inset-x-4 top-4 flex justify-center">
-              <span className="rounded-full border border-banana/35 bg-screen/75 px-4 py-2 font-[family-name:var(--font-display)] text-[10px] text-banana backdrop-blur">
-                One finger paints · two fingers zoom &amp; pan
+              <span
+                className={`rounded-full border bg-screen/80 px-4 py-2 text-center font-[family-name:var(--font-display)] text-[10px] backdrop-blur ${
+                  tool === "erase"
+                    ? "border-pixelred/40 text-pixelred"
+                    : "border-banana/40 text-banana"
+                }`}
+              >
+                {tool === "erase"
+                  ? "ERASE — paint over anything you want removed"
+                  : "RESTORE — paint to bring the original image back"}
               </span>
             </div>
           )}
@@ -1608,10 +1633,8 @@ function MaskPrepEditor({
             </div>
           )}
 
-          {/* The flexible middle: this panel scrolls so the Save button below
-              is ALWAYS on screen. It grew past the fold once the doubled
-              up/down range and the extra buttons landed, and a Save you
-              cannot reach means the edit cannot be kept at all. */}
+          {/* The flexible middle scrolls so the save button remains reachable
+              even with the full set of precision controls. */}
           <div className="min-h-0 flex-1 overflow-y-auto rounded-[20px] border border-cream/10 bg-grid/80 p-3">
             <p className="font-[family-name:var(--font-display)] text-[10px] text-cream/50">
               Fit
@@ -1619,22 +1642,21 @@ function MaskPrepEditor({
             <FitSlider
               label="Left / right"
               value={fit.anchorOffsetX}
-              min={-0.24}
-              max={0.24}
+              min={-FIT_RANGE.x}
+              max={FIT_RANGE.x}
               step={0.005}
+              output={formatSignedPercent(fit.anchorOffsetX)}
               onChange={(anchorOffsetX) => updateFit({ anchorOffsetX })}
             />
-            {/* Vertical travel is DOUBLE the horizontal range. Sideways you
-                only ever nudge a mask; downward you may need to push a whole
-                head down to sit on your own — tall art, hats, and any mask
-                whose face sits high in its own square all ran out of slider
-                at 0.24 and could not be brought down far enough. */}
+            {/* Extra vertical travel handles tall art, hats, and subjects whose
+                face sits high or low inside the source image. */}
             <FitSlider
               label="Up / down"
               value={fit.anchorOffsetY}
-              min={-0.5}
-              max={0.5}
+              min={-FIT_RANGE.y}
+              max={FIT_RANGE.y}
               step={0.005}
+              output={formatSignedPercent(fit.anchorOffsetY)}
               onChange={(anchorOffsetY) => updateFit({ anchorOffsetY })}
             />
             {/* Wide scale range so small-headed art (e.g. Mad Lads) can be worn
@@ -1642,9 +1664,10 @@ function MaskPrepEditor({
             <FitSlider
               label="Scale"
               value={fit.scaleOffset}
-              min={-0.5}
-              max={2}
+              min={FIT_RANGE.scaleMin}
+              max={FIT_RANGE.scaleMax}
               step={0.005}
+              output={`${Math.round((1 + fit.scaleOffset) * 100)}%`}
               onChange={(scaleOffset) => updateFit({ scaleOffset })}
             />
             <button
@@ -1997,7 +2020,7 @@ function MobileToolbar({
         <MobileIcon onClick={onOpenMore} label="More options" icon={<SlidersHorizontal size={18} strokeWidth={2.5} />} />
         <PixelButton onClick={onSave} disabled={saving} className="min-h-12 flex-1">
           <Check size={16} strokeWidth={3} />
-          {saving ? "Saving..." : "Save"}
+          {saving ? "Saving..." : "Save avatar"}
         </PixelButton>
       </div>
     </div>
@@ -2180,27 +2203,28 @@ function MoreSheet({
       <FitSlider
         label="Left / right"
         value={fit.anchorOffsetX}
-        min={-0.24}
-        max={0.24}
+        min={-FIT_RANGE.x}
+        max={FIT_RANGE.x}
         step={0.005}
+        output={formatSignedPercent(fit.anchorOffsetX)}
         onChange={(anchorOffsetX) => updateFit({ anchorOffsetX })}
       />
-      {/* Same doubled vertical range as the desktop panel (see aside). */}
       <FitSlider
         label="Up / down"
         value={fit.anchorOffsetY}
-        min={-0.5}
-        max={0.5}
+        min={-FIT_RANGE.y}
+        max={FIT_RANGE.y}
         step={0.005}
+        output={formatSignedPercent(fit.anchorOffsetY)}
         onChange={(anchorOffsetY) => updateFit({ anchorOffsetY })}
       />
-      {/* Same expanded range as the desktop fit panel (see aside). */}
       <FitSlider
         label="Scale"
         value={fit.scaleOffset}
-        min={-0.5}
-        max={2}
+        min={FIT_RANGE.scaleMin}
+        max={FIT_RANGE.scaleMax}
         step={0.005}
+        output={`${Math.round((1 + fit.scaleOffset) * 100)}%`}
         onChange={(scaleOffset) => updateFit({ scaleOffset })}
       />
       <div className="mt-4 grid grid-cols-2 gap-2">
@@ -2268,6 +2292,7 @@ function FitSlider({
   min,
   max,
   step,
+  output,
   onChange,
 }: {
   label: string;
@@ -2275,14 +2300,26 @@ function FitSlider({
   min: number;
   max: number;
   step: number;
+  output: string;
   onChange: (value: number) => void;
 }) {
+  const id = useId();
+
   return (
-    <label className="mt-3 block">
+    <div className="mt-3 block">
       {/* /70 rather than /50: these labels now sit on a translucent sheet over
           a live camera feed, and 50% washed out against a bright background. */}
-      <span className="text-sm text-cream/70">{label}</span>
+      <span className="flex items-baseline justify-between gap-3 text-sm text-cream/70">
+        <label htmlFor={id}>{label}</label>
+        <output
+          htmlFor={id}
+          className="font-[family-name:var(--font-display)] text-[9px] tabular-nums text-banana"
+        >
+          {output}
+        </output>
+      </span>
       <input
+        id={id}
         type="range"
         min={min}
         max={max}
@@ -2291,8 +2328,13 @@ function FitSlider({
         onChange={(event) => onChange(Number(event.target.value))}
         className="mt-2 w-full"
       />
-    </label>
+    </div>
   );
+}
+
+function formatSignedPercent(value: number) {
+  const percentage = Math.round(value * 100);
+  return `${percentage > 0 ? "+" : ""}${percentage}%`;
 }
 
 interface Point {

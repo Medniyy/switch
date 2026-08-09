@@ -26,16 +26,130 @@ async function fixturePng(): Promise<Buffer> {
 async function uploadFixture(page: Page) {
   const [chooser] = await Promise.all([
     page.waitForEvent("filechooser"),
-    page.getByRole("button", { name: /Upload a photo/i }).click(),
+    page.getByRole("button", { name: /Add a custom image/i }).click(),
   ]);
   await chooser.setFiles({
     name: "me.png",
     mimeType: "image/png",
     buffer: await fixturePng(),
   });
-  await expect(page.getByRole("button", { name: "WEAR IT" })).toBeVisible({
+  await expect(page.getByRole("button", { name: "USE AVATAR" })).toBeVisible({
     timeout: 60_000,
   });
+}
+
+async function dispatchImageTransfer(
+  page: Page,
+  kind: "drop" | "paste",
+  image: Buffer
+) {
+  await page.evaluate(
+    ({ kind, base64 }) => {
+      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+      const transfer = new DataTransfer();
+      transfer.items.add(
+        new File([bytes], `${kind}-avatar.png`, { type: "image/png" })
+      );
+
+      if (kind === "paste") {
+        document.dispatchEvent(
+          new ClipboardEvent("paste", {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: transfer,
+          })
+        );
+        return;
+      }
+
+      const target = document.querySelector<HTMLButtonElement>(
+        'button[aria-label^="Add a custom image"]'
+      );
+      if (!target) throw new Error("custom-image drop zone unavailable");
+      target.dispatchEvent(
+        new DragEvent("dragenter", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: transfer,
+        })
+      );
+      target.dispatchEvent(
+        new DragEvent("drop", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: transfer,
+        })
+      );
+    },
+    { kind, base64: image.toString("base64") }
+  );
+}
+
+test("custom images can be dropped or pasted from the clipboard", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await page.goto("/create");
+  const image = await fixturePng();
+
+  await dispatchImageTransfer(page, "drop", image);
+  await expect(page.getByRole("button", { name: "USE AVATAR" })).toBeVisible({
+    timeout: 60_000,
+  });
+
+  await page.getByRole("button", { name: "Pick another image" }).click();
+  await expect(
+    page.getByRole("button", { name: /Add a custom image/i })
+  ).toBeVisible();
+
+  await dispatchImageTransfer(page, "paste", image);
+  await expect(page.getByRole("button", { name: "USE AVATAR" })).toBeVisible({
+    timeout: 60_000,
+  });
+});
+
+async function editorAlpha(page: Page, nx: number, ny: number) {
+  return page.evaluate(
+    ({ nx, ny }) => {
+      const canvas = (
+        window as unknown as {
+          __switchMaskEditor?: { getEditCanvas: () => HTMLCanvasElement | null };
+        }
+      ).__switchMaskEditor?.getEditCanvas();
+      if (!canvas) return -1;
+      const x = Math.round((canvas.width - 1) * nx);
+      const y = Math.round((canvas.height - 1) * ny);
+      return canvas.getContext("2d")!.getImageData(x, y, 1, 1).data[3];
+    },
+    { nx, ny }
+  );
+}
+
+async function paintEditorPoint(page: Page, nx: number, ny: number) {
+  const point = await page.evaluate(
+    ({ nx, ny }) => {
+      const editor = (
+        window as unknown as {
+          __switchMaskEditor?: {
+            getEditCanvas: () => HTMLCanvasElement | null;
+            getVisibleCanvas: () => HTMLCanvasElement | null;
+          };
+        }
+      ).__switchMaskEditor;
+      const edit = editor?.getEditCanvas();
+      const visible = editor?.getVisibleCanvas();
+      if (!edit || !visible) return null;
+      const rect = visible.getBoundingClientRect();
+      const side = Math.min(rect.width, rect.height);
+      return {
+        x: rect.left + (rect.width - side) / 2 + nx * side,
+        y: rect.top + (rect.height - side) / 2 + ny * side,
+      };
+    },
+    { nx, ny }
+  );
+  expect(point).not.toBeNull();
+  await page.mouse.click(point!.x, point!.y);
 }
 
 test("upload → wear → persisted on device → delete", async ({ page }) => {
@@ -52,8 +166,8 @@ test("upload → wear → persisted on device → delete", async ({ page }) => {
   // it got the subject wrong, so whatever else succeeded is offered as an
   // alternative rather than the user being stuck with a bad cutout.
   await expect(page.getByRole("button", { name: /EDGE CUTOUT/i })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "EDIT" })).toBeVisible();
-  await page.getByRole("button", { name: "WEAR IT" }).click();
+  await expect(page.getByRole("button", { name: "ERASE / RESTORE" })).toBeVisible();
+  await page.getByRole("button", { name: "USE AVATAR" }).click();
 
   // Lands in the recorder actually wearing it (mask loaded from IndexedDB).
   await page.waitForURL(/\/record/, { timeout: 30_000 });
@@ -98,8 +212,27 @@ test("upload → wear → persisted on device → delete", async ({ page }) => {
   const wearSaved = page.getByLabel(/Wear My Avatar/i);
   await expect(wearSaved).toBeVisible();
 
-  // …and deletable.
+  // Editing is available here, before recording, instead of being discoverable
+  // only after the avatar has already opened the camera.
+  await page.getByRole("button", { name: /Edit My Avatar/i }).click();
+  await page.waitForFunction(
+    () =>
+      !!(
+        window as unknown as {
+          __switchMaskEditor?: { getEditCanvas: () => HTMLCanvasElement | null };
+        }
+      ).__switchMaskEditor?.getEditCanvas(),
+    undefined,
+    { timeout: 30_000 }
+  );
+  await expect(page.getByRole("button", { name: /Back to avatars/i })).toBeVisible();
+  await page.getByRole("button", { name: /Back to avatars/i }).click();
+  await expect(wearSaved).toBeVisible();
+
+  // Deletion now requires confirmation instead of a destructive corner tap.
   await page.getByLabel("Delete this avatar").click();
+  await expect(page.getByText("Delete this avatar?")).toBeVisible();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(wearSaved).toHaveCount(0);
 });
 
@@ -112,7 +245,20 @@ test("custom avatar gets the full mobile editor before and after wearing", async
   await uploadFixture(page);
 
   await expect(page.getByRole("button", { name: /EDGE CUTOUT/i })).toHaveCount(0);
-  await page.getByRole("button", { name: "EDIT" }).click();
+  // Make one source-backed pixel region missing from the accepted cutout. This
+  // avoids tying the regression to whichever result MediaPipe prefers here.
+  await page.evaluate(() => {
+    const canvas = (
+      window as unknown as {
+        __switchAvatarPreview?: { getChoiceCanvas: () => HTMLCanvasElement };
+      }
+    ).__switchAvatarPreview?.getChoiceCanvas();
+    if (!canvas) throw new Error("avatar preview canvas unavailable");
+    canvas
+      .getContext("2d")!
+      .clearRect(canvas.width * 0.03, canvas.height * 0.45, canvas.width * 0.04, canvas.height * 0.1);
+  });
+  await page.getByRole("button", { name: "ERASE / RESTORE" }).click();
   await page.waitForFunction(
     () =>
       !!(
@@ -125,20 +271,41 @@ test("custom avatar gets the full mobile editor before and after wearing", async
   );
 
   await expect(page.getByText(/original art is not reachable/i)).toHaveCount(0);
+  await expect(page.getByText(/ERASE — paint over/i)).toBeVisible();
   await expect(page.getByRole("button", { name: /^Brush ·/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "More options" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save avatar" })).toBeVisible();
+
+  // Restore must recover the missing region from the untouched upload, not
+  // from the transparent accepted cutout.
+  expect(await editorAlpha(page, 0.05, 0.5)).toBeLessThan(32);
+  await page.getByRole("button", { name: "Restore", exact: true }).click();
+  await paintEditorPoint(page, 0.05, 0.5);
+  expect(await editorAlpha(page, 0.05, 0.5)).toBeGreaterThan(160);
 
   await page.getByRole("button", { name: "More options" }).click();
   await expect(page.getByText("Adjust fit")).toBeVisible();
-  await expect(page.getByLabel("Left / right")).toBeVisible();
-  await expect(page.getByLabel("Up / down")).toBeVisible();
-  await expect(page.getByLabel("Scale")).toBeVisible();
+  const horizontal = page.getByLabel("Left / right");
+  const vertical = page.getByLabel("Up / down");
+  const scale = page.getByLabel("Scale");
+  await expect(horizontal).toHaveAttribute("min", "-0.75");
+  await expect(horizontal).toHaveAttribute("max", "0.75");
+  await expect(vertical).toHaveAttribute("min", "-1.25");
+  await expect(vertical).toHaveAttribute("max", "1.25");
+  await expect(scale).toHaveAttribute("min", "-0.65");
+  await expect(scale).toHaveAttribute("max", "3");
+
+  await horizontal.fill("0.75");
+  await expect(page.getByText("+75%", { exact: true })).toBeVisible();
+  await vertical.fill("-1.25");
+  await expect(page.getByText("-125%", { exact: true })).toBeVisible();
+  await scale.fill("3");
+  await expect(page.getByText("400%", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Remove background" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Bring back full artwork/i })).toBeVisible();
   await page.getByRole("button", { name: "Close" }).last().click();
 
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Save avatar" }).click();
   await page.waitForURL(/\/record/, { timeout: 30_000 });
   await page.getByRole("button", { name: "Edit mask" }).click();
   await page.waitForFunction(
@@ -157,7 +324,7 @@ test("custom avatar gets the full mobile editor before and after wearing", async
     page.getByRole("button", { name: "Preview", exact: true })
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "More options" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save avatar" })).toBeVisible();
 });
 
 test("the gallery offers the create-your-own card", async ({ page }) => {

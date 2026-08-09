@@ -17,11 +17,12 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type DragEvent as ReactDragEvent,
 } from "react";
 import type { FaceLandmarker } from "@mediapipe/tasks-vision";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { ImagePlus, Pencil, Trash2, ShieldCheck } from "lucide-react";
+import { Eraser, ImagePlus, Pencil, Trash2, ShieldCheck } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 import {
   prepareArtwork,
@@ -66,6 +67,11 @@ type Stage =
   | { kind: "processing"; step: PrepStep; ratio: number | null }
   | ({ kind: "preview" } & PreviewData)
   | { kind: "editor"; preview: PreviewData; initialImage: HTMLImageElement }
+  | {
+      kind: "saved-editor";
+      record: SavedUserMask;
+      initialImage: HTMLImageElement;
+    }
   | { kind: "saving" };
 
 interface PreviewData {
@@ -102,6 +108,8 @@ export default function CreatePage() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<SavedUserMask[]>([]);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
+  const [deleteKey, setDeleteKey] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
 
   // Load the avatars already on this device.
   const refresh = useCallback(async () => {
@@ -139,10 +147,13 @@ export default function CreatePage() {
     };
   }, []);
 
-  const onFile = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = ""; // same file can be picked again later
-    if (!file) return;
+  const processFile = useCallback(async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      setError("Choose, drop, or paste an image file.");
+      return;
+    }
+
+    setDragActive(false);
     setError(null);
     setStage({ kind: "processing", step: "downloading", ratio: null });
     try {
@@ -202,6 +213,50 @@ export default function CreatePage() {
       setStage({ kind: "idle" });
     }
   }, []);
+
+  const onFile = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      e.target.value = ""; // same file can be picked again later
+      if (file) void processFile(file);
+    },
+    [processFile]
+  );
+
+  const onDrop = useCallback(
+    (event: ReactDragEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      setDragActive(false);
+      const files = Array.from(event.dataTransfer.files);
+      const image = files.find((file) => file.type.startsWith("image/"));
+      if (image) {
+        void processFile(image);
+        return;
+      }
+      if (files.length) setError("Choose, drop, or paste an image file.");
+    },
+    [processFile]
+  );
+
+  // Paste works anywhere on the empty create screen, not only after focusing
+  // the drop zone. Clipboard text is ignored so normal browser shortcuts keep
+  // behaving normally; only a real image file is claimed by this page.
+  useEffect(() => {
+    if (stage.kind !== "idle") return;
+
+    const onPaste = (event: ClipboardEvent) => {
+      const imageItem = Array.from(event.clipboardData?.items ?? []).find(
+        (item) => item.kind === "file" && item.type.startsWith("image/")
+      );
+      const image = imageItem?.getAsFile();
+      if (!image) return;
+      event.preventDefault();
+      void processFile(image);
+    };
+
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [processFile, stage.kind]);
 
   const wear = useCallback(
     async (
@@ -281,6 +336,18 @@ export default function CreatePage() {
     [router, setSelectedNFT]
   );
 
+  const editSaved = useCallback(async (record: SavedUserMask) => {
+    setError(null);
+    setStage({ kind: "saving" });
+    try {
+      const initialImage = await blobToImage(record.editedMaskBlob);
+      setStage({ kind: "saved-editor", record, initialImage });
+    } catch {
+      setError("This avatar could not be opened for editing. Try creating it again.");
+      setStage({ kind: "idle" });
+    }
+  }, []);
+
   const remove = useCallback(
     async (key: string) => {
       try {
@@ -288,33 +355,45 @@ export default function CreatePage() {
       } catch {
         /* removal is best-effort */
       }
+      setDeleteKey(null);
       void refresh();
     },
     [refresh]
   );
 
-  if (stage.kind === "editor") {
+  if (stage.kind === "editor" || stage.kind === "saved-editor") {
+    const record = stage.kind === "saved-editor" ? stage.record : null;
+    const id =
+      stage.kind === "saved-editor"
+        ? Number(stage.record.tokenId)
+        : stage.preview.id;
     const nft = {
-      id: stage.preview.id,
+      id,
       collection: MY_AVATARS,
-      name: "My Avatar",
-      image: `custom:${maskKey(MY_AVATARS, stage.preview.id)}`,
+      name: record?.tokenName ?? "My Avatar",
+      image: record?.sourceImageUrl ?? `custom:${maskKey(MY_AVATARS, id)}`,
     };
     return createPortal(
       <div className="fixed inset-0 z-[60] bg-screen">
         <MaskPreparationFlow
           nft={nft}
-          existingRecord={null}
+          existingRecord={record}
           existingImage={stage.initialImage}
-          artworkBlob={stage.preview.artworkBlob}
+          artworkBlob={
+            stage.kind === "editor"
+              ? stage.preview.artworkBlob
+              : record?.sourceImageBlob
+          }
           videoRef={editorVideoRef}
           landmarkerRef={editorLandmarkerRef}
           canvasRef={editorCanvasRef}
           skipChoiceToEditor
           livePreview={false}
-          backLabel="Back to preview"
+          backLabel={stage.kind === "editor" ? "Back to preview" : "Back to avatars"}
           onChooseAnother={() =>
-            setStage({ kind: "preview", ...stage.preview })
+            stage.kind === "editor"
+              ? setStage({ kind: "preview", ...stage.preview })
+              : setStage({ kind: "idle" })
           }
           onComplete={({ record }) => {
             setSelectedNFT({
@@ -353,16 +432,50 @@ export default function CreatePage() {
         {stage.kind === "idle" && (
           <>
             <button
+              type="button"
               onClick={() => fileRef.current?.click()}
-              className="mt-6 flex w-full flex-col items-center gap-4 rounded-[var(--radius-card)] border-[3px] border-dashed border-banana/45 bg-banana/[0.06] px-6 py-12 transition-colors hover:bg-banana/10 active:scale-[0.99]"
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setDragActive(true);
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+                setDragActive(true);
+              }}
+              onDragLeave={(event) => {
+                if (
+                  event.relatedTarget instanceof Node &&
+                  event.currentTarget.contains(event.relatedTarget)
+                ) {
+                  return;
+                }
+                setDragActive(false);
+              }}
+              onDrop={onDrop}
+              aria-label="Add a custom image — choose a file, drop it here, or paste it"
+              className={`mt-6 flex w-full flex-col items-center gap-4 rounded-[var(--radius-card)] border-[3px] border-dashed px-6 py-12 transition-[background-color,border-color,transform] duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-banana focus-visible:ring-offset-4 focus-visible:ring-offset-screen active:scale-[0.99] ${
+                dragActive
+                  ? "scale-[1.01] border-banana bg-banana/15"
+                  : "border-banana/45 bg-banana/[0.06] hover:border-banana/70 hover:bg-banana/10"
+              }`}
             >
-              <span className="flex h-16 w-16 items-center justify-center rounded-full bg-banana/15 text-banana">
+              <span
+                className={`flex h-16 w-16 items-center justify-center rounded-full text-banana transition-transform duration-200 ${
+                  dragActive ? "scale-110 bg-banana/25" : "bg-banana/15"
+                }`}
+              >
                 <ImagePlus size={30} strokeWidth={2.25} />
               </span>
               <span className="font-[family-name:var(--font-display)] text-sm text-cream/85">
-                Upload a photo of yourself
+                {dragActive ? "Drop it here" : "Add a photo of yourself"}
               </span>
               <span className="text-sm text-cream/50">
+                {dragActive
+                  ? "Release to start the on-device cutout."
+                  : "Drop an image, paste with Ctrl/⌘ + V, or click to browse."}
+              </span>
+              <span className="text-xs text-cream/35">
                 The background comes off automatically when we find you in it.
               </span>
             </button>
@@ -377,32 +490,83 @@ export default function CreatePage() {
 
             {saved.length > 0 && (
               <section className="mt-8">
-                <h2 className="mb-3 font-[family-name:var(--font-display)] text-[11px] uppercase tracking-wider text-cream/50">
-                  On this device
-                </h2>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="mb-3 flex items-end justify-between gap-4">
+                  <div>
+                    <h2 className="font-[family-name:var(--font-display)] text-sm text-cream/85">
+                      Your saved avatars
+                    </h2>
+                    <p className="mt-1 text-xs text-cream/45">
+                      Use one now or fix its cutout before recording.
+                    </p>
+                  </div>
+                  <span className="text-xs tabular-nums text-cream/35">
+                    {saved.length} on this device
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                   {saved.map((r) => (
-                    <div key={r.key} className="group relative">
+                    <article
+                      key={r.key}
+                      className="relative overflow-hidden rounded-[20px] border border-cream/12 bg-grid/70 p-2"
+                    >
                       <button
                         onClick={() => wearSaved(r)}
-                        className="block w-full overflow-hidden rounded-2xl border-[2px] border-cream/20 bg-grid transition-transform active:scale-[0.97]"
+                        className="group relative block w-full overflow-hidden rounded-[14px] bg-screen transition-transform active:scale-[0.98]"
                         aria-label={`Wear ${r.tokenName ?? "avatar"}`}
                       >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
                           src={thumbs[r.key]}
                           alt={r.tokenName ?? "Saved avatar"}
-                          className="aspect-square w-full object-cover"
+                          className="aspect-square w-full object-contain transition-transform duration-200 group-hover:scale-[1.02]"
                         />
+                        <span className="absolute inset-x-2 bottom-2 rounded-full bg-screen/80 px-3 py-2 font-[family-name:var(--font-display)] text-[10px] text-cream backdrop-blur-sm">
+                          Use avatar
+                        </span>
                       </button>
-                      <button
-                        onClick={() => void remove(r.key)}
-                        aria-label="Delete this avatar"
-                        className="absolute -right-2 -top-2 flex h-7 w-7 items-center justify-center rounded-full border-[2px] border-screen bg-pixelred text-white opacity-90 active:scale-90"
-                      >
-                        <Trash2 size={13} strokeWidth={2.5} />
-                      </button>
-                    </div>
+                      <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
+                        <button
+                          onClick={() => void editSaved(r)}
+                          className="flex min-h-11 items-center justify-center gap-2 rounded-full border border-banana/35 bg-banana/[0.07] px-3 font-[family-name:var(--font-display)] text-[10px] text-banana transition-colors hover:bg-banana/12 active:scale-[0.98]"
+                          aria-label={`Edit ${r.tokenName ?? "avatar"}`}
+                        >
+                          <Pencil size={14} strokeWidth={2.5} />
+                          Edit cutout
+                        </button>
+                        <button
+                          onClick={() => setDeleteKey(r.key)}
+                          aria-label="Delete this avatar"
+                          className="flex h-11 w-11 items-center justify-center rounded-full border border-cream/12 bg-white/5 text-cream/45 transition-colors hover:border-pixelred/40 hover:text-pixelred active:scale-90"
+                        >
+                          <Trash2 size={15} strokeWidth={2.5} />
+                        </button>
+                      </div>
+
+                      {deleteKey === r.key && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-screen/95 p-4 text-center backdrop-blur-sm">
+                          <p className="font-[family-name:var(--font-display)] text-sm text-cream">
+                            Delete this avatar?
+                          </p>
+                          <p className="text-xs leading-snug text-cream/50">
+                            Its saved cutout and edits will be removed from this device.
+                          </p>
+                          <div className="grid w-full grid-cols-2 gap-2">
+                            <button
+                              onClick={() => setDeleteKey(null)}
+                              className="min-h-11 rounded-full border border-cream/20 text-xs text-cream/70 active:scale-[0.98]"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => void remove(r.key)}
+                              className="min-h-11 rounded-full border border-pixelred/50 bg-pixelred/10 text-xs text-pixelred active:scale-[0.98]"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </article>
                   ))}
                 </div>
               </section>
@@ -482,6 +646,23 @@ function PreviewStage({
   const viewRef = useRef<HTMLCanvasElement | null>(null);
   const choice = options[picked] ?? options[0];
 
+  // Dev/test seam: lets the browser test make a deterministic missing patch in
+  // the accepted cutout, independent of which result the ML model prefers on
+  // a given machine. The editor must restore that patch from artworkBlob.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production" || !choice) return;
+    (
+      window as unknown as {
+        __switchAvatarPreview?: { getChoiceCanvas: () => HTMLCanvasElement };
+      }
+    ).__switchAvatarPreview = { getChoiceCanvas: () => choice.canvas };
+    return () => {
+      delete (
+        window as unknown as { __switchAvatarPreview?: unknown }
+      ).__switchAvatarPreview;
+    };
+  }, [choice]);
+
   // Blit the chosen result into the on-page canvas (checkerboard behind it
   // so transparency reads). The sources are drawn from, never modified.
   useEffect(() => {
@@ -500,6 +681,14 @@ function PreviewStage({
 
   return (
     <div className="mt-6 flex flex-col gap-4">
+      <div className="text-center">
+        <h2 className="font-[family-name:var(--font-display)] text-lg text-cream">
+          Check your cutout
+        </h2>
+        <p className="mt-1 text-sm leading-snug text-cream/50">
+          Missing part of the image? Restore it. Background left over? Erase it.
+        </p>
+      </div>
       <div className="aspect-square w-full overflow-hidden rounded-[var(--radius-card)] pixel-border bg-[conic-gradient(#22252b_0_25%,#181b20_0_50%,#22252b_0_75%,#181b20_0)] bg-[length:24px_24px]">
         <canvas ref={viewRef} className="h-full w-full" />
       </div>
@@ -532,19 +721,22 @@ function PreviewStage({
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="flex flex-col gap-2 sm:grid sm:grid-cols-2">
         <PixelButton
           variant="secondary"
           className="flex-1"
           onClick={() => onEdit(choice.canvas)}
         >
-          <Pencil size={15} strokeWidth={2.5} />
-          EDIT
+          <Eraser size={15} strokeWidth={2.5} />
+          ERASE / RESTORE
         </PixelButton>
         <PixelButton className="flex-1" onClick={() => onWear(choice.canvas)}>
-          WEAR IT
+          USE AVATAR
         </PixelButton>
       </div>
+      <p className="text-center text-xs text-cream/40">
+        You can edit this avatar again before recording.
+      </p>
       <button
         onClick={onRetry}
         className="mx-auto px-4 py-2 text-xs text-cream/50 transition-colors hover:text-cream active:scale-[0.98]"

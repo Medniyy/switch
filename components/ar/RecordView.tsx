@@ -9,7 +9,6 @@ import {
   CameraOff,
   Edit3,
   ImagePlus,
-  MicOff,
   ScrollText,
   Search,
   Settings,
@@ -170,8 +169,14 @@ export function RecordView() {
   // makes Android duck the playback volume (see useCameraStream).
   const liveActive = !!selectedNFT && !result && !photoResult && !captured;
 
-  const { videoRef, attachVideo, status: camStatus, retry, audioStatus } =
-    useCameraStream(audioTrackRef, liveActive);
+  const {
+    videoRef,
+    attachVideo,
+    status: camStatus,
+    retry,
+    audioStatus,
+    requestMicrophone,
+  } = useCameraStream(audioTrackRef, liveActive);
   const { landmarkerRef, status: meshStatus } = useFaceMesh();
   const { handLandmarkerRef, status: handStatus } = useHandTracking(catchOn);
 
@@ -579,7 +584,8 @@ export function RecordView() {
         {showControls && !isRecording && (
           <div className="absolute right-3 top-1/2 -translate-y-1/2 z-30 flex flex-col gap-3">
             <MaskQuickToggles
-              micBlocked={audioStatus === "denied"}
+              micStatus={audioStatus}
+              onRequestMicrophone={() => void requestMicrophone()}
               maskFlip={runtimeMask?.record.maskFlip ?? false}
               onToggleMaskFlip={toggleMaskFlip}
             />
@@ -656,21 +662,6 @@ export function RecordView() {
             <span className="max-w-sm border-[2px] border-pixelred bg-screen/90 px-3 py-2 text-center font-[family-name:var(--font-display)] text-[9px] leading-relaxed text-pixelred backdrop-blur-sm">
               {recordError}
             </span>
-          </div>
-        )}
-
-        {/* Mic-blocked banner (non-blocking) */}
-        {showControls && audioStatus === "denied" && (
-          <div className="absolute inset-x-0 top-16 z-30 flex justify-center px-4">
-            <button
-              onClick={retry}
-              className="flex items-center gap-2 bg-screen/85 border-[2px] border-pixelred px-3 py-2 backdrop-blur-sm active:scale-95"
-            >
-              <MicOff size={14} className="text-pixelred" />
-              <span className="font-[family-name:var(--font-display)] text-pixelred text-[8px] leading-tight text-left">
-                MIC BLOCKED — TAP TO ALLOW (RECORDS SILENT)
-              </span>
-            </button>
           </div>
         )}
 

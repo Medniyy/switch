@@ -1,7 +1,14 @@
 "use client";
 
-import { FlipHorizontal2, Mic, MicOff, ScanFace } from "lucide-react";
+import {
+  FlipHorizontal2,
+  LoaderCircle,
+  Mic,
+  MicOff,
+  ScanFace,
+} from "lucide-react";
 import { useAppStore, VIDEO_QUALITY, type VideoQuality } from "@/store/useAppStore";
+import type { AudioStatus } from "./useCameraStream";
 
 const QUALITIES: VideoQuality[] = ["sd", "hd", "full"];
 
@@ -81,11 +88,13 @@ export function MaskSettings() {
  * style): mask flip, camera mirror, mic.
  */
 export function MaskQuickToggles({
-  micBlocked = false,
+  micStatus,
+  onRequestMicrophone,
   maskFlip,
   onToggleMaskFlip,
 }: {
-  micBlocked?: boolean;
+  micStatus: AudioStatus;
+  onRequestMicrophone: () => void;
   maskFlip: boolean;
   onToggleMaskFlip: () => void;
 }) {
@@ -97,7 +106,19 @@ export function MaskQuickToggles({
   // When the OS blocked the mic, the toggle can't enable audio — reflect the
   // real state (off) so it doesn't falsely read "MIC ON". The banner handles
   // re-requesting permission.
-  const micOn = audioEnabled && !micBlocked;
+  const micOn = audioEnabled && micStatus === "granted";
+  const micBusy = micStatus === "requesting";
+  const micLabel = microphoneLabel(micStatus, micOn);
+  const micHint = microphoneHint(micStatus);
+
+  const handleMicClick = () => {
+    if (micBusy) return;
+    if (micStatus === "granted") {
+      setAudioEnabled(!audioEnabled);
+      return;
+    }
+    onRequestMicrophone();
+  };
 
   return (
     <>
@@ -115,30 +136,72 @@ export function MaskQuickToggles({
       >
         <ScanFace size={20} strokeWidth={2.5} />
       </OverlayToggle>
-      <OverlayToggle
-        active={micOn}
-        onClick={() => !micBlocked && setAudioEnabled(!audioEnabled)}
-        label={micBlocked ? "MIC BLOCKED" : micOn ? "MIC ON" : "MIC OFF"}
-      >
-        {micOn ? (
-          <Mic size={20} strokeWidth={2.5} />
-        ) : (
-          <MicOff size={20} strokeWidth={2.5} />
+      <div className="relative flex justify-end">
+        {micHint && (
+          <span
+            aria-live="polite"
+            className={`pointer-events-none absolute right-14 top-1/2 -translate-y-1/2 whitespace-nowrap rounded-full border px-2.5 py-1.5 font-[family-name:var(--font-display)] text-[7px] leading-none backdrop-blur-sm ${
+              micStatus === "blocked" || micStatus === "restart-required"
+                ? "border-pixelred/70 bg-screen/80 text-pixelred"
+                : "border-cream/25 bg-screen/70 text-cream/75"
+            }`}
+          >
+            {micHint}
+          </span>
         )}
-      </OverlayToggle>
+        <OverlayToggle
+          active={micOn}
+          onClick={handleMicClick}
+          label={micLabel}
+          disabled={micBusy}
+          alert={micStatus === "blocked" || micStatus === "restart-required"}
+        >
+          {micBusy ? (
+            <LoaderCircle className="animate-spin" size={20} strokeWidth={2.5} />
+          ) : micOn ? (
+            <Mic size={20} strokeWidth={2.5} />
+          ) : (
+            <MicOff size={20} strokeWidth={2.5} />
+          )}
+        </OverlayToggle>
+      </div>
     </>
   );
+}
+
+function microphoneLabel(status: AudioStatus, micOn: boolean) {
+  if (status === "requesting") return "CONNECTING MIC";
+  if (status === "needs-permission") return "ALLOW MIC";
+  if (status === "blocked") return "MIC BLOCKED — CHECK BROWSER SETTINGS";
+  if (status === "restart-required") return "RELOAD TO RESTORE MIC";
+  if (status === "error") return "RETRY MIC";
+  if (status === "off") return "CONNECT MIC";
+  return micOn ? "MIC ON" : "MIC OFF";
+}
+
+function microphoneHint(status: AudioStatus) {
+  if (status === "requesting") return "CONNECTING…";
+  if (status === "needs-permission") return "TAP TO CONNECT MIC";
+  if (status === "blocked") return "ALLOW MIC IN BROWSER SETTINGS";
+  if (status === "restart-required") return "TAP TO RELOAD MIC";
+  if (status === "error") return "TAP TO RETRY MIC";
+  if (status === "off") return "TAP TO CONNECT MIC";
+  return null;
 }
 
 function OverlayToggle({
   active,
   onClick,
   label,
+  disabled = false,
+  alert = false,
   children,
 }: {
   active: boolean;
   onClick: () => void;
   label: string;
+  disabled?: boolean;
+  alert?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -147,9 +210,12 @@ function OverlayToggle({
       aria-pressed={active}
       aria-label={label}
       title={label}
-      className={`w-11 h-11 rounded-full border-[2px] flex items-center justify-center backdrop-blur-sm transition-colors active:scale-95 ${
+      disabled={disabled}
+      className={`w-11 h-11 rounded-full border-[2px] flex items-center justify-center backdrop-blur-sm transition-colors active:scale-95 disabled:cursor-wait ${
         active
           ? "bg-banana text-screen border-banana"
+          : alert
+            ? "bg-screen/70 text-pixelred border-pixelred/70"
           : "bg-screen/55 text-cream border-cream/40"
       }`}
     >

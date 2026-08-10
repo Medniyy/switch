@@ -9,6 +9,7 @@ import {
   type ProcessedMic,
 } from "@/lib/audio";
 import { startMp4Recording, type Mp4RecorderHandle } from "@/lib/mp4Recorder";
+import { normalizeRecordedMp4 } from "@/lib/mp4Normalize";
 
 export const MAX_SECONDS = 60;
 
@@ -127,8 +128,14 @@ function silentMicMessage(track: MediaStreamTrack | null): string {
  *
  * Two engines, decided at start() and never mid-clip:
  *   1. WebCodecs (lib/mp4Recorder) — a flat, faststart, constant-frame-rate
- *      H.264/AAC MP4. This is the one that produces an editable file.
- *   2. MediaRecorder — the legacy path, kept for browsers without WebCodecs.
+ *      H.264/AAC MP4, editable straight out of the encoder.
+ *   2. MediaRecorder — for browsers without WebCodecs, and for every WebKit take
+ *      with sound (see start()). Its own output is fragmented and variable-rate,
+ *      so it is rewritten into the same flat CFR shape after the fact by
+ *      lib/mp4Normalize, without re-encoding anything.
+ *
+ * Either way the file a user downloads is a progressive H.264/AAC MP4 at a
+ * constant frame rate.
  */
 export function useMediaRecorder(
   canvasRef: RefObject<HTMLCanvasElement | null>,
@@ -345,11 +352,34 @@ export function useMediaRecorder(
         // cap, or a track ending) so no interval survives into the next session.
         clearTimers();
         const ext = mimeType.includes("mp4") ? "mp4" : "webm";
-        publish(new Blob(chunksRef.current, { type: mimeType }), ext);
+        const raw = new Blob(chunksRef.current, { type: mimeType });
+        chunksRef.current = [];
         setIsRecording(false);
         setElapsed(0);
         stopMic();
-        stoppingRef.current = false;
+
+        // What MediaRecorder just wrote is a *fragmented*, *variable-frame-rate*
+        // MP4 — one `moof`/`mdat` pair per timeslice, and frames arriving at
+        // whatever rate the device managed while claiming another. Both play
+        // fine in a browser and both wreck an edit: dropped into CapCut, such a
+        // clip stutters and drifts out of sync until it has been round-tripped
+        // through something that re-encodes it (Telegram, historically).
+        //
+        // So rewrite the container before handing the clip over: same encoded
+        // samples, flat `moov` at the front, one constant frame duration. The
+        // AUDIO is copied through byte-for-byte — untouched is the whole point,
+        // the mic path is the one thing here that is already right.
+        //
+        // Cheap by comparison to the recording itself, but not instant on a 60 s
+        // take, so it runs inside the existing "saving" state. It can't fail
+        // destructively: an unparseable file comes back exactly as it went in.
+        setSaving(true);
+        normalizeRecordedMp4(raw)
+          .then((blob) => publish(blob, ext))
+          .finally(() => {
+            setSaving(false);
+            stoppingRef.current = false;
+          });
       };
 
       // Flush in 1s timeslices. Without this, MediaRecorder buffers the whole

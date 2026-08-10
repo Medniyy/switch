@@ -130,10 +130,13 @@ test("exported clip is constant frame rate at the declared duration", async ({
   }
 });
 
-test("MediaRecorder fallback still writes AAC, not Opus", async ({ page }) => {
+test("MediaRecorder fallback is rewritten into the same editable shape", async ({
+  page,
+}) => {
   // Hide WebCodecs so the recorder takes the legacy MediaRecorder path. This is
-  // the path Safari-without-WebCodecs and older Android WebViews get, and it is
-  // exactly where the Opus-in-MP4 bug lived — it needs its own guard, because
+  // the path Safari-without-WebCodecs and older Android WebViews get — and, more
+  // importantly, the path EVERY iPhone take with sound gets, because WebKit's
+  // WebAudio tap can hand the encoder digital silence. It needs its own guard:
   // the primary path would otherwise mask a regression here forever.
   await page.addInitScript(() => {
     // @ts-expect-error deliberately removing a global for the test
@@ -142,13 +145,37 @@ test("MediaRecorder fallback still writes AAC, not Opus", async ({ page }) => {
     delete window.AudioEncoder;
   });
 
-  const bytes = await recordClip(page, 4);
+  const seconds = 6;
+  const bytes = await recordClip(page, seconds);
   const mp4 = summarizeMp4(new Uint8Array(bytes));
 
-  // The fallback cannot control fragmentation or frame pacing — that's the whole
-  // reason WebCodecs is the primary path — but it MUST NOT emit Opus in an MP4.
+  // Opus in an MP4 is the original sin and must never come back.
   expect(mp4.video?.format).toBe("avc1");
   expect(mp4.audio?.format).toBe("mp4a");
+
+  // MediaRecorder itself writes a fragmented, variable-rate file. lib/mp4Normalize
+  // re-muxes it — same encoded samples, flat index, one frame duration — so the
+  // fallback's output must now pass the same container checks as the primary
+  // path. Without that rewrite this file is the one that stutters and desyncs in
+  // an editor until it has been round-tripped through Telegram.
+  expect(mp4.fragmented, `top-level boxes: ${mp4.topLevel.join(" ")}`).toBe(
+    false
+  );
+  expect(mp4.faststart, `top-level boxes: ${mp4.topLevel.join(" ")}`).toBe(true);
+  expect(
+    isConstantFrameRate(mp4.video!),
+    `stts runs: ${JSON.stringify(mp4.video!.sttsRuns)}`
+  ).toBe(true);
+
+  // The rewrite must not stretch, shorten or de-sync anything. Rate is left
+  // deliberately unasserted beyond sanity: it is whatever the device really
+  // delivered, and constant at a real 21 fps is the goal, not a fictional 30.
+  expect(measuredFps(mp4.video!)).toBeGreaterThan(5);
+  expect(mp4.video!.durationSeconds).toBeGreaterThan(seconds - 2);
+  expect(mp4.video!.durationSeconds).toBeLessThan(seconds + 2);
+  expect(
+    Math.abs(mp4.audio!.durationSeconds - mp4.video!.durationSeconds)
+  ).toBeLessThan(0.5);
 });
 
 test("never returns a silent clip when AAC encoding is unavailable", async ({

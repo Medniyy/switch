@@ -55,7 +55,7 @@ selectedNFT ─────┴→ RecordView → FaceMaskCanvas (rAF loop):
 | Live compositing loop | `components/ar/FaceMaskCanvas.tsx` |
 | Camera / mic lifecycle | `components/ar/useCameraStream.ts`, `lib/audio.ts` |
 | Face landmarker | `components/ar/useFaceMesh.ts`, `lib/mediapipe.ts` |
-| Recording | `components/recorder/useMediaRecorder.ts` |
+| Recording | `components/recorder/useMediaRecorder.ts` (engines: `lib/mp4Recorder.ts` WebCodecs, MediaRecorder + `lib/mp4Normalize.ts` rewrite) |
 | Mask preparation + brush editor | `components/mask-prep/MaskPreparationFlow.tsx` |
 | Photo composition (multi-PFP) | `components/photo/PhotoEditor.tsx`, `lib/photo.ts` |
 | Saved-mask persistence | `lib/userMasks.ts` (IndexedDB, versioned + migrated) |

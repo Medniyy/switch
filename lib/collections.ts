@@ -2,15 +2,16 @@ import { BASE_PATH } from "./basePath";
 
 /**
  * SWITCH collection registry — the single source of truth for every wearable
- * collection. Ordered Solana-first, then Ethereum.
+ * collection. Ordered Solana-first, then Ethereum, then Cosmos.
  *
  * The `fetch` descriptor is used ONLY by the build-time scripts in scripts/
- * (fetch-solana.ts / fetch-ethereum.ts / fetch-covers.ts) to generate the static
+ * (fetch-solana.ts / fetch-ethereum.ts / fetch-contract.ts / fetch-covers.ts)
+ * to generate the static
  * public/data/<id>.json token index and public/collections/<id>.png cover. The
  * running app never touches it — at runtime everything is static JSON + images.
  */
 
-export type Chain = "solana" | "ethereum";
+export type Chain = "solana" | "ethereum" | "cosmos";
 
 /** How a collection's token index + cover are sourced at BUILD time only. */
 export type FetchSource =
@@ -47,6 +48,18 @@ export type FetchSource =
       firstId: number;
       /** Token count, when `totalSupply` isn't the minted id range — burns make
        *  the two diverge, and the index should still cover every minted id. */
+      supply?: number;
+    }
+  | {
+      via: "cosmwasm";
+      /** CW721 contract address. The same shape as `contract` above, reached
+       *  through a CosmWasm smart query instead of an EVM `eth_call`:
+       *  `nft_info` returns the token URI, `num_tokens` the count. Keyless — a
+       *  public LCD endpoint is all it takes. */
+      contract: string;
+      /** First token id. CW721 ids are strings; these sets number from 1. */
+      firstId: number;
+      /** Token count, when `num_tokens` isn't the minted id range (see above). */
       supply?: number;
     };
 
@@ -274,6 +287,28 @@ export const COLLECTIONS: CollectionMeta[] = [
     hidden: true,
     fetch: { via: "opensea", slug: "milady" },
   },
+
+  // ---- Cosmos ----
+  {
+    id: "bluefrens",
+    name: "Bluefrens",
+    tag: "Bluefrens",
+    chain: "cosmos",
+    accent: "#28D8F8",
+    // Crisp pixel-art characters with hard outlines — exactly the art the
+    // geometric matte reads better than the general-subject model. See
+    // `preferMatteCutout` for the measurements behind that choice.
+    preferMatteCutout: true,
+    // Traded on Stargaze, but deployed to the Cosmos Hub (a `cosmos1…` CosmWasm
+    // contract), so the index comes straight off the chain rather than through
+    // Stargaze's API: 1420 tokens, ids 1…1420, metadata in one IPFS directory.
+    fetch: {
+      via: "cosmwasm",
+      contract:
+        "cosmos1dpx0r360h5wvszg9q8y9qz98rncyuscygql8zfxt0wvya307p4pq8l7nz2",
+      firstId: 1,
+    },
+  },
 ];
 
 /** The brand lime — default card accent when a collection sets none. */
@@ -339,4 +374,7 @@ export const SOLANA_COLLECTIONS = VISIBLE_COLLECTIONS.filter(
 );
 export const ETHEREUM_COLLECTIONS = VISIBLE_COLLECTIONS.filter(
   (c) => c.chain === "ethereum"
+);
+export const COSMOS_COLLECTIONS = VISIBLE_COLLECTIONS.filter(
+  (c) => c.chain === "cosmos"
 );

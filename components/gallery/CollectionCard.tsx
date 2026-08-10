@@ -3,10 +3,19 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Crown } from "lucide-react";
-import type { CollectionMeta } from "@/lib/collections";
+import type { Chain, CollectionMeta } from "@/lib/collections";
 import { coverSrc, DEFAULT_ACCENT } from "@/lib/collections";
 import { useStats } from "@/components/stats/useStats";
 import { rememberCollectionsOpen } from "@/lib/appNavigation";
+
+/** What the corner badge calls each chain — the native token, which is how
+ *  holders name the chain they are on. Exhaustive by type, so adding a chain to
+ *  the registry without a ticker fails the build instead of the card. */
+const CHAIN_TICKER: Record<Chain, string> = {
+  solana: "SOL",
+  ethereum: "ETH",
+  cosmos: "ATOM",
+};
 
 /** One interactive collection tile in the "Choose your wear" gallery. */
 export function CollectionCard({
@@ -57,7 +66,7 @@ export function CollectionCard({
 
         {/* chain badge */}
         <span className="absolute top-2 left-2 glass rounded-full px-2 py-0.5 text-[9px] uppercase tracking-wider text-cream/80">
-          {collection.chain === "solana" ? "SOL" : "ETH"}
+          {CHAIN_TICKER[collection.chain]}
         </span>
 
         {/* Usage badge. Crown and count live in ONE element rather than

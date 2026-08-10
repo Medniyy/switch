@@ -1,7 +1,7 @@
 # SWITCH
 
 Wear any NFT PFP as a live face mask, snap a photo or record a clip, and share it.
-Multi-chain (Solana + Ethereum), mobile-first, and **fully on-device** — your
+Multi-chain (Solana + Ethereum + Cosmos), mobile-first, and **fully on-device** — your
 camera, microphone, and captures never leave your browser.
 
 > A community tool. All NFT artwork, names, and trademarks belong to their
@@ -13,7 +13,7 @@ camera, microphone, and captures never leave your browser.
 ## How it works
 
 1. **Choose your wear** — the opening gallery lists curated collections (Solana
-   first, then Ethereum), each with its own marketplace PFP.
+   first, then Ethereum, then Cosmos), each with its own marketplace PFP.
 2. **Find your token** — pick a collection, type your token number.
 3. **Wear it** — the PFP tracks your face live (photo mode is the default and the
    PFP is on from the first frame).
@@ -41,6 +41,7 @@ from a private backend at runtime** (so there is nothing to host on Railway etc)
 # one-time, on a dev machine (needs keys in .env.local — see .env.local.example)
 npm run data:solana     # Helius DAS → Solana collections
 npm run data:ethereum   # OpenSea v2 → Ethereum collections
+npm run data:contract   # contract metadata → ERC-721 / CW721 collections (no key)
 npm run data:covers     # marketplace PFPs → gallery covers
 # or, to test the app with placeholder art before fetching real data:
 npm run data:sample
@@ -49,7 +50,10 @@ npm run data:sample
 - **Solana** — Helius DAS `getAssetsByGroup` enumerates each collection; the token
   number is parsed from the asset name. Collection address auto-resolves from the
   Magic Eden symbol.
-- **Ethereum** — OpenSea API v2; the ERC-721 `tokenId` is the number the user types.
+- **Ethereum** — OpenSea API v2, or the contract's own `tokenURI`; the ERC-721
+  `tokenId` is the number the user types.
+- **Cosmos** — a CW721 read through a CosmWasm smart query (`nft_info` /
+  `num_tokens`) on a public LCD; the token id is the number the user types.
 
 ## Develop
 

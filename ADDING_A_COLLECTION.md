@@ -18,13 +18,15 @@ Add a `CollectionMeta` entry to `COLLECTIONS` in
   id: "my-collection",        // slug — used in routes (/c/my-collection) and file names
   name: "My Collection",      // full display name
   tag: "My Coll",             // short label under the gallery card
-  chain: "solana",            // "solana" | "ethereum"
+  chain: "solana",            // "solana" | "ethereum" | "cosmos"
   accent: "#C6F432",          // optional card accent (defaults to the lime brand)
   hidden: true,               // keep hidden until data is generated; remove to show
   fetch: { via: "helius", meSymbol: "my_collection_me_symbol" },
   // Ethereum instead: fetch: { via: "opensea", slug: "my-opensea-slug" },
   // Or, keyless, straight from the contract's own metadata:
   // fetch: { via: "contract", contract: "0x…", firstId: 0 },
+  // Cosmos (CW721, e.g. a Stargaze-traded set): same idea over a smart query:
+  // fetch: { via: "cosmwasm", contract: "cosmos1…", firstId: 1 },
 }
 ```
 
@@ -40,22 +42,24 @@ see [.env.local.example](.env.local.example)):
 ```bash
 npm run data:solana     # Helius DAS  → public/data/<id>.json   (needs HELIUS_API_KEY)
 npm run data:ethereum   # OpenSea v2  → public/data/<id>.json   (needs OPENSEA_API_KEY)
-npm run data:contract   # ERC-721 tokenURI → public/data/<id>.json   (no key)
+npm run data:contract   # ERC-721 / CW721 → public/data/<id>.json   (no key)
 npm run data:covers     # marketplace cover → public/collections/<id>.png
 ```
 
-`data:contract` is the no-API-key path for an ERC-721 with uniform metadata. It
-reads `tokenURI` / `totalSupply` from a public RPC, derives the image + name
-template from the first token, then **verifies that template against four sampled
-tokens across the range** and aborts rather than writing a bad index. The metadata
-host doesn't matter — an IPFS directory (Pudgy Penguins) and an HTTPS API (Lil
+`data:contract` is the no-API-key path for any contract with uniform metadata,
+on either chain: it reads `tokenURI` / `totalSupply` from a public Ethereum RPC,
+or `nft_info` / `num_tokens` through a CosmWasm smart query on a public LCD. From
+there both are identical — it derives the image + name template from the first
+token, then **verifies that template against four sampled tokens across the
+range** and aborts rather than writing a bad index. The metadata host doesn't
+matter — an IPFS directory (Pudgy Penguins, Bluefrens) and an HTTPS API (Lil
 Pudgys) both work, as long as only the id varies between tokens. `data:ethereum`
 stays the general path for anything irregular.
 
-Watch `totalSupply` vs the minted id range: burns make them diverge (Lil Pudgys
-reports 21931 but ids run 0…22221). When they differ, pin the range with an
-explicit `supply` — check the upper bound by binary-searching `ownerOf` for the
-first id that reverts.
+Watch the reported supply vs the minted id range: burns make them diverge (Lil
+Pudgys reports 21931 but ids run 0…22221). When they differ, pin the range with
+an explicit `supply` — check the upper bound by binary-searching `ownerOf` for
+the first id that reverts.
 
 Each script iterates every registry collection it handles and writes
 `public/data/<id>.json` ( `{ [tokenNumber]: { name, image } }` ). Re-running is

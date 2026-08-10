@@ -3,6 +3,10 @@
  * the gallery cards.
  *  - Solana: the collection NFT's own art via Helius (reliable; no ME throttle).
  *  - Ethereum: the collection image via OpenSea (needs OPENSEA_API_KEY).
+ *  - Cosmos: the CW721's own `collection_info` image (keyless).
+ *
+ * Whatever the chain, anything that fails to produce a URL falls back to the
+ * collection's first token — see firstTokenImage.
  *
  * Run once locally: `npm run data:covers`.
  */
@@ -21,6 +25,8 @@ import { rpc, imageOf, resolveCollectionAddress, type DasAsset } from "./_solana
 
 loadEnv();
 const OPENSEA_KEY = process.env.OPENSEA_API_KEY;
+const LCD = process.env.COSMOS_LCD_URL || "https://rest.cosmos.directory/cosmoshub";
+const GATEWAY = process.env.IPFS_GATEWAY || "https://ipfs.io/ipfs/";
 
 async function solanaCoverUrl(meta: CollectionMeta): Promise<string | null> {
   if (meta.fetch.via !== "helius") return null;
@@ -39,6 +45,28 @@ async function ethereumCoverUrl(meta: CollectionMeta): Promise<string | null> {
     { headers: { "x-api-key": OPENSEA_KEY, accept: "application/json" } }
   );
   return data.image_url ?? null;
+}
+
+/**
+ * The CW721's own collection art. `get_collection_info_and_extension` is the
+ * CosmWasm equivalent of the collection NFT's metadata on Solana — for
+ * Bluefrens it is a real character PFP, not a wordmark, which is exactly what
+ * the card wants.
+ */
+async function cosmosCoverUrl(meta: CollectionMeta): Promise<string | null> {
+  if (meta.fetch.via !== "cosmwasm") return null;
+  const msg = Buffer.from(JSON.stringify({ get_collection_info_and_extension: {} }))
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+  const res = await fetchJSON<{ data?: { extension?: { image?: string } } }>(
+    `${LCD}/cosmwasm/wasm/v1/contract/${meta.fetch.contract}/smart/${msg}`
+  );
+  const image = res.data?.extension?.image;
+  if (!image) return null;
+  return image.startsWith("ipfs://")
+    ? GATEWAY + image.slice("ipfs://".length)
+    : image;
 }
 
 /**
@@ -75,7 +103,9 @@ async function download(url: string, dest: string): Promise<void> {
         ? null
         : c.fetch.via === "helius"
           ? await solanaCoverUrl(c)
-          : await ethereumCoverUrl(c);
+          : c.fetch.via === "cosmwasm"
+            ? await cosmosCoverUrl(c)
+            : await ethereumCoverUrl(c);
       const url = primary ?? firstTokenImage(c.id);
       if (!url) {
         console.log(`- ${c.id}: no cover url (skipped)`);

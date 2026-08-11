@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import { prepareArtwork } from "@/lib/prepareArtwork";
 import {
-  isCollectionArtwork,
   prefersSegmenterCutout,
+  usesCollapseGuard,
 } from "@/lib/collections";
 
 export interface CutoutResult {
@@ -56,7 +56,7 @@ export function useCutoutImage(
       try {
         const prepared = await prepareArtwork(raw, {
           preferSegmenter: prefersSegmenterCutout(collectionId),
-          collapseGuard: isCollectionArtwork(collectionId),
+          collapseGuard: usesCollapseGuard(collectionId),
         });
         canvas = prepared.via === "original" ? null : prepared.canvas;
       } catch {

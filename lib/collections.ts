@@ -99,6 +99,27 @@ export interface CollectionMeta {
    */
   preferMatteCutout?: boolean;
   /**
+   * This collection's backdrops are SCENES — photographs or paintings — rather
+   * than the designed flat backdrop PFP art normally sits on. It turns the
+   * collapse guard off, and only that.
+   *
+   * The guard promotes the other engine when the leading one keeps less than
+   * COLLAPSE_RATIO of what the other kept, on the reasoning that it amputated
+   * the subject. That reasoning needs both engines to be plausible readings of
+   * the same image. On a scene they are not: the matte has no border to walk in
+   * from, so it keeps almost the whole frame and scores high precisely BECAUSE
+   * it failed, while a correct model cutout legitimately scores low. The guard
+   * then reads the good result as the collapsed one and hands the background
+   * back. Measured on Retardio Cousins 2026-08-11, segmenter vs matte coverage:
+   * #11 0.374/0.931, #1500 0.411/0.913, #4000 0.376/0.917, #4444 0.384/0.776 —
+   * all four swapped to the matte and opened with the scene fully intact, and
+   * "Remove background" could not fix it because it applies the same guard.
+   *
+   * Leave it unset for art on a flat designed backdrop, where the matte is the
+   * meaningful second opinion the guard was built on (see `preferMatteCutout`).
+   */
+  sceneBackdrop?: boolean;
+  /**
    * Index the Helius CDN mirror (`content.files[].cdn_uri`) instead of the
    * collection's own image host. Set this when that host is slow enough to hurt:
    * Mad Lads serves ~5.7MB PNGs from an S3 bucket that regularly needs 90s+,
@@ -218,6 +239,20 @@ export const COLLECTIONS: CollectionMeta[] = [
     chain: "solana",
     accent: "#4FC3E8",
     fetch: { via: "helius", meSymbol: "claynosaurz" },
+  },
+  {
+    id: "retardio-cousins",
+    name: "Retardio Cousins",
+    tag: "Retardio",
+    chain: "solana",
+    accent: "#F0A0C0",
+    // Hand-painted characters over photographic and painterly backdrops (a
+    // street market, a highway, a Monet) — no flat backdrop anywhere, so the
+    // general-subject model leads and `preferMatteCutout` stays off: this is
+    // precisely the art the geometric matte walks straight through. That same
+    // fact is why the collapse guard has to be off here (see `sceneBackdrop`).
+    sceneBackdrop: true,
+    fetch: { via: "helius", meSymbol: "retardio_cousins" },
   },
   {
     id: "hot-heads",
@@ -348,6 +383,21 @@ export function prefersSegmenterCutout(id: string | null | undefined): boolean {
  */
 export function isCollectionArtwork(id: string | null | undefined): boolean {
   return !!id && !!getCollection(id);
+}
+
+/**
+ * Whether `collapseGuard` may run for this source. Being collection artwork is
+ * necessary but not sufficient: a collection whose backdrops are scenes rather
+ * than a flat designed field breaks the comparison the guard rests on, and
+ * there the guard reliably promotes the WORSE result. See `sceneBackdrop`.
+ *
+ * This is the value every caller should pass — `isCollectionArtwork` alone
+ * answers a different question (artwork vs. a user's photo).
+ */
+export function usesCollapseGuard(id: string | null | undefined): boolean {
+  if (!id) return false;
+  const collection = getCollection(id);
+  return !!collection && collection.sceneBackdrop !== true;
 }
 
 /**

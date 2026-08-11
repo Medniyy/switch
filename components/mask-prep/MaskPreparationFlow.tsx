@@ -46,9 +46,9 @@ import {
   type SavedUserMask,
 } from "@/lib/userMasks";
 import {
-  isCollectionArtwork,
   prefersSegmenterCutout,
   usesAutoCutout,
+  usesCollapseGuard,
 } from "@/lib/collections";
 import { prepareArtwork } from "@/lib/prepareArtwork";
 import { MASK_SOURCE_WIDTH } from "@/lib/imageSrc";
@@ -512,7 +512,7 @@ function useStartingMask(
         // drops the body. Whichever loses is still kept as the fallback.
         const prepared = await prepareArtwork(rawImage, {
           preferSegmenter: prefersSegmenterCutout(nft.collection),
-          collapseGuard: isCollectionArtwork(nft.collection),
+          collapseGuard: usesCollapseGuard(nft.collection),
         });
         const canvas = prepared.via === "original" ? null : prepared.canvas;
         const img = canvas
@@ -1186,7 +1186,7 @@ function MaskPrepEditor({
       const prepared = await prepareArtwork(source, {
         crop: false,
         preferSegmenter: prefersSegmenterCutout(collectionId),
-        collapseGuard: isCollectionArtwork(collectionId),
+        collapseGuard: usesCollapseGuard(collectionId),
       });
       if (prepared.via === "original") {
         setCutMessage(

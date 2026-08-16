@@ -8,6 +8,7 @@ import {
   Banana,
   CameraOff,
   Edit3,
+  EyeOff,
   ImagePlus,
   ScrollText,
   Search,
@@ -62,6 +63,7 @@ import {
   type SavedUserMask,
 } from "@/lib/userMasks";
 import { useLockBodyScroll } from "@/lib/useLockBodyScroll";
+import { useIsDesktop } from "@/lib/useMediaQuery";
 import type { NFT } from "@/lib/types";
 import {
   avatarPickerHref,
@@ -140,6 +142,14 @@ export function RecordView() {
   const [scriptOpen, setScriptOpen] = useState(false);
   // >0 while the 3-2-1 lead-in is on screen; recording starts when it hits 0.
   const [countdown, setCountdown] = useState(0);
+  // "Hide UI" — strips every control off the stage so a screen recorder (OBS
+  // window capture) sees ONLY the camera + worn PFP. Desktop-only: it exists
+  // for capture software, and on a phone there is no second window to drive
+  // the app from and no Esc key to get back.
+  const [uiHidden, setUiHidden] = useState(false);
+  // The one-shot "press Esc" hint. It fades itself out so it can't end up in a
+  // recording the user starts a few seconds later.
+  const [showHideHint, setShowHideHint] = useState(false);
 
   // Read the stored script after mount — localStorage isn't available during
   // the static prerender, and reading it in a useState initialiser would make
@@ -164,6 +174,39 @@ export function RecordView() {
 
   // The secret MonkeyDAO (SMB Gen2/Gen3) filter menu — gated by stable id.
   const monkeyDao = isMonkeyDaoCollection(selectedNFT?.collection);
+
+  const isDesktop = useIsDesktop();
+  // Never let a narrow/short viewport get stuck with no controls: the toggle is
+  // only honoured while the desktop layout is actually on, so shrinking the
+  // window brings the interface straight back.
+  const chromeHidden = isDesktop && uiHidden;
+
+  const revealUi = useCallback(() => {
+    setUiHidden(false);
+    setShowHideHint(false);
+  }, []);
+
+  const hideUi = useCallback(() => {
+    setUiHidden(true);
+    setShowHideHint(true);
+  }, []);
+
+  // Esc is the way back. Without it, hiding the only visible control would be a
+  // one-way door short of a page reload.
+  useEffect(() => {
+    if (!chromeHidden) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") revealUi();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [chromeHidden, revealUi]);
+
+  useEffect(() => {
+    if (!showHideHint) return;
+    const t = window.setTimeout(() => setShowHideHint(false), 2600);
+    return () => window.clearTimeout(t);
+  }, [showHideHint]);
 
   // Run the camera/mic only while the live stage is on screen — not while a clip
   // is previewing or a photo is being edited. Holding the mic open during preview
@@ -292,9 +335,15 @@ export function RecordView() {
     !faceDetected &&
     !anyResult &&
     !preparingMask &&
-    !isRecording;
+    !isRecording &&
+    !chromeHidden;
   const showControls =
-    !anyResult && !inEditor && !preparingMask && !!runtimeMask && supported;
+    !anyResult &&
+    !inEditor &&
+    !preparingMask &&
+    !!runtimeMask &&
+    supported &&
+    !chromeHidden;
 
   // Snap the RAW camera frame (not the composited canvas) and continue into the
   // photo editor — the same complete flow as an uploaded photo, for EVERY
@@ -469,12 +518,25 @@ export function RecordView() {
   }
 
   return (
-    <div className="h-[100dvh] overflow-hidden bg-screen flex items-center justify-center desktop:p-6">
+    <div
+      className={`h-[100dvh] overflow-hidden bg-screen flex items-center justify-center ${
+        chromeHidden ? "" : "desktop:p-6"
+      }`}
+    >
       {/* Full-screen camera stage with overlay controls (camera-app style).
           Mobile: portrait, edge-to-edge (object-cover fills the phone). Desktop:
           a large landscape frame at the camera's native aspect so you see the
-          WHOLE frame you're capturing (object-contain), not a cropped 9:16 slice. */}
-      <div className="relative w-full h-dvh desktop:h-[82vh] desktop:w-auto desktop:aspect-video desktop:max-w-[94vw] bg-grid overflow-hidden desktop:pixel-border">
+          WHOLE frame you're capturing (object-contain), not a cropped 9:16 slice.
+          Hidden-UI: the framing chrome goes too — no inset, no pixel border, no
+          grid — so a window capture gets edge-to-edge camera with nothing of the
+          app in the crop. */}
+      <div
+        className={`relative overflow-hidden ${
+          chromeHidden
+            ? "w-full h-dvh bg-black"
+            : "w-full h-dvh desktop:h-[82vh] desktop:w-auto desktop:aspect-video desktop:max-w-[94vw] bg-grid desktop:pixel-border"
+        }`}
+      >
         {/* Hidden source video (kept rendered so it keeps decoding) */}
         <video
           ref={attachVideo}
@@ -498,7 +560,11 @@ export function RecordView() {
             catchGameRef={catchOn ? catchGameRef : undefined}
             trackRef={liveTrackRef}
             onFaceChange={setFaceDetected}
-            className="absolute inset-0 w-full h-full object-cover desktop:object-contain"
+            className={`absolute inset-0 w-full h-full ${
+              chromeHidden
+                ? "object-cover"
+                : "object-cover desktop:object-contain"
+            }`}
           />
         )}
 
@@ -524,7 +590,7 @@ export function RecordView() {
         {/* Teleprompter — a DOM overlay ABOVE the canvas, never drawn into it,
             so the script cannot end up in the exported clip. Scrolls only while
             actually recording. */}
-        {scriptActive && !anyResult && !inEditor && (
+        {scriptActive && !anyResult && !inEditor && !chromeHidden && (
           <Teleprompter
             script={teleprompter.script}
             wpm={teleprompter.wpm}
@@ -557,8 +623,8 @@ export function RecordView() {
           />
         )}
 
-        {/* Top bar: back, PFP name, gear */}
-        {!inEditor && (
+        {/* Top bar: back, PFP name, hide-UI, gear */}
+        {!inEditor && !chromeHidden && (
           <div className="absolute top-0 inset-x-0 z-30 flex items-start justify-between p-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
             <button
               type="button"
@@ -572,6 +638,19 @@ export function RecordView() {
               <span className="px-2 py-1 rounded bg-screen/55 border-[2px] border-banana/70 backdrop-blur-sm font-[family-name:var(--font-display)] text-banana text-[9px]">
                 {selectedNFT.name}
               </span>
+              {/* Desktop only — this exists for screen-capture software, which
+                  is a desktop situation, and Esc (the way back) needs a keyboard. */}
+              {isDesktop && showControls && !isRecording && (
+                <button
+                  onClick={hideUi}
+                  aria-label="Hide interface"
+                  title="Hide interface (Esc to bring it back)"
+                  className="flex items-center gap-1.5 rounded-full border-[2px] border-cream/40 bg-screen/55 px-2.5 py-2 font-[family-name:var(--font-display)] text-[9px] text-cream backdrop-blur-sm active:scale-95"
+                >
+                  <EyeOff size={16} strokeWidth={2.5} />
+                  HIDE UI
+                </button>
+              )}
               {showControls && !isRecording && (
                 <button
                   onClick={() => setSettingsOpen(true)}
@@ -752,6 +831,23 @@ export function RecordView() {
               />
             )}
           </div>
+        )}
+
+        {/* Hidden-UI escape hatch. Fades itself out well before any take starts,
+            so it can't be the one bit of interface that lands in a capture. */}
+        {chromeHidden && (
+          <button
+            type="button"
+            onClick={revealUi}
+            aria-label="Show interface"
+            className={`absolute inset-x-0 top-0 z-40 flex justify-center p-4 transition-opacity duration-700 ${
+              showHideHint ? "opacity-100" : "opacity-0 pointer-events-none"
+            }`}
+          >
+            <span className="rounded-full border border-cream/25 bg-screen/80 px-3 py-1.5 font-[family-name:var(--font-display)] text-[9px] text-cream/80 backdrop-blur-sm">
+              PRESS ESC TO SHOW THE INTERFACE
+            </span>
+          </button>
         )}
 
         {/* Loading / permission / error overlays */}

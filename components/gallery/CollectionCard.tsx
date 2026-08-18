@@ -45,13 +45,29 @@ export function CollectionCard({
         className="relative aspect-square w-full rounded-[var(--radius-card)] overflow-hidden pixel-border transition-transform duration-200 group-hover:-translate-y-1 group-active:scale-[0.98]"
         style={{ boxShadow: `0 14px 34px -18px ${accent}` }}
       >
+        {/* A limited drop ships ONE transparent art file, used as both its cover
+            and its mask. object-cover would crop it and transparency would show
+            the page through the card, so it gets contained on its own accent
+            field instead — which also reads as "this card is different". */}
+        {collection.limited && (
+          <div
+            aria-hidden
+            className="absolute inset-0"
+            style={{
+              background: `radial-gradient(circle at 50% 42%, ${accent}33, transparent 72%), var(--color-grid)`,
+            }}
+          />
+        )}
+
         {/* Cover art (marketplace PFP). Falls back to an accent gradient. */}
         {!broken ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={coverSrc(collection.id)}
             alt={collection.name}
-            className="absolute inset-0 w-full h-full object-cover"
+            className={`absolute inset-0 w-full h-full ${
+              collection.limited ? "object-contain p-4" : "object-cover"
+            }`}
             loading="lazy"
             onError={() => setBroken(true)}
           />
@@ -64,10 +80,23 @@ export function CollectionCard({
           />
         )}
 
-        {/* chain badge */}
-        <span className="absolute top-2 left-2 glass rounded-full px-2 py-0.5 text-[9px] uppercase tracking-wider text-cream/80">
-          {CHAIN_TICKER[collection.chain]}
-        </span>
+        {/* Chain badge — or, for a limited drop, the LIMITED tag in its place.
+            Always on, never a hover reveal: the scarcity IS the reason to open
+            the card, so it has to be readable from the carousel. It takes the
+            chain badge's slot rather than sitting beside it; two pills in one
+            corner just fight each other at card size. */}
+        {collection.limited ? (
+          <span
+            className="absolute top-2 left-2 rounded-full px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.16em] text-screen shadow-[0_2px_10px_rgba(0,0,0,0.45)]"
+            style={{ background: accent }}
+          >
+            Limited
+          </span>
+        ) : (
+          <span className="absolute top-2 left-2 glass rounded-full px-2 py-0.5 text-[9px] uppercase tracking-wider text-cream/80">
+            {CHAIN_TICKER[collection.chain]}
+          </span>
+        )}
 
         {/* Usage badge. Crown and count live in ONE element rather than
             opposite corners — two small marks competed with each other and with

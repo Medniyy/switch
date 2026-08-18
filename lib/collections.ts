@@ -61,6 +61,15 @@ export type FetchSource =
       firstId: number;
       /** Token count, when `num_tokens` isn't the minted id range (see above). */
       supply?: number;
+    }
+  | {
+      /** Hand-shipped: no scraper, no chain call. The token index
+       *  (public/data/<id>.json) and the art (public/collections/<id>.png) are
+       *  placed by hand and deployed with the local build, exactly like the
+       *  generated ones. For one-off drops that were never minted as an
+       *  indexable set. Every `npm run data:*` script skips it by
+       *  construction, because none of them match on this `via`. */
+      via: "local";
     };
 
 export interface CollectionMeta {
@@ -134,10 +143,55 @@ export interface CollectionMeta {
    * pre-reveal silhouette — which makes for a dead card. Build-time only.
    */
   coverFromToken?: boolean;
+  /**
+   * Multiplier for the fit scale a NEWLY prepared mask opens at — 1.65 means
+   * 165% instead of the usual 100%. Art whose subject is much wider than a
+   * human head, or that carries a lot of empty margin, has to start bigger or
+   * the first thing the user sees is a mask that does not cover their face.
+   * A STARTING value only: the fit slider, and any mask the user already saved,
+   * both win over it.
+   */
+  defaultScale?: number;
+
+  // ---- Limited drop (see LIMITED-DROP.md) ----
+  /** Show the LIMITED badge on the gallery card, in place of the chain ticker. */
+  limited?: boolean;
+  /**
+   * A collection of exactly ONE token, named here. The finder skips the number
+   * pad and offers that token directly — typing a number to find the only thing
+   * there is would be theatre.
+   */
+  singleToken?: number;
+  /** "Where do I get this?" — rendered as a link on the collection page. */
+  link?: { label: string; href: string };
+
   fetch: FetchSource;
 }
 
 export const COLLECTIONS: CollectionMeta[] = [
+  // ---- Limited drop — FIRST in the gallery on purpose (see LIMITED-DROP.md).
+  //      Temporary: this whole entry comes back out when the drop ends. ----
+  {
+    id: "deaton",
+    name: "Deaton",
+    tag: "Deaton",
+    chain: "solana",
+    accent: "#E0A83C",
+    limited: true,
+    singleToken: 1,
+    link: {
+      label: "app.jurassic.finance",
+      href: "https://app.jurassic.finance/",
+    },
+    // A triceratops skull is far wider than a human head and sits inside a lot
+    // of empty margin, so the auto-fit lands well short of covering a face.
+    defaultScale: 1.65,
+    // Hand-supplied transparent PNG — there is nothing to key out, and running
+    // the cutout engines over already-cut art only risks eating the horns.
+    autoCutout: false,
+    fetch: { via: "local" },
+  },
+
   // ---- Solana (first) ----
   {
     id: "smb-gen2",
@@ -361,6 +415,16 @@ export function getCollection(id: string): CollectionMeta | undefined {
 export function usesAutoCutout(id: string | null | undefined): boolean {
   if (!id) return true;
   return getCollection(id)?.autoCutout !== false;
+}
+
+/**
+ * The fit scaleOffset a newly prepared mask starts at — 0 (100%) unless the
+ * collection asks for something else via `defaultScale`. Unknown ids and
+ * custom uploads get the plain default.
+ */
+export function defaultFitScaleOffset(id: string | null | undefined): number {
+  const scale = (id && getCollection(id)?.defaultScale) || 1;
+  return scale - 1;
 }
 
 /**

@@ -16,6 +16,11 @@ const SAMPLE = 120; // ids 1..120 per collection — enough to test the flow
 const force = process.env.FORCE === "1";
 
 for (const c of COLLECTIONS) {
+  // Hand-shipped collections own their index — never overwrite it, even FORCE=1.
+  if (c.fetch.via === "local") {
+    console.log(`- ${c.id}.json is hand-shipped (skipped)`);
+    continue;
+  }
   const path = resolve(DATA_DIR, `${c.id}.json`);
   if (!force && existsSync(path)) {
     console.log(`- ${c.id}.json exists (skipped; FORCE=1 to overwrite)`);

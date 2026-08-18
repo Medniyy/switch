@@ -8,6 +8,10 @@ changes to the camera, editor or renderer.
 > enhancement and are **out of scope here** — a collection works without them.
 > No collection ships them today; every token uses the on-device path.
 
+> A **hand-shipped** collection — art placed by hand rather than scraped, e.g. a
+> one-off drop — takes `fetch: { via: "local" }` and skips step 2 entirely. See
+> [LIMITED-DROP.md](LIMITED-DROP.md) for a worked example.
+
 ## 1. Register the collection
 
 Add a `CollectionMeta` entry to `COLLECTIONS` in

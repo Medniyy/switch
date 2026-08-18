@@ -46,6 +46,7 @@ import {
   type SavedUserMask,
 } from "@/lib/userMasks";
 import {
+  defaultFitScaleOffset,
   prefersSegmenterCutout,
   usesAutoCutout,
   usesCollapseGuard,
@@ -122,6 +123,17 @@ const DEFAULT_FIT: MaskFit = {
   anchorOffsetY: 0,
   scaleOffset: 0,
 };
+
+/**
+ * The fit a mask for this collection STARTS at. Centred, unrotated and at the
+ * collection's own default scale — 100% for almost everything, larger for art
+ * whose subject is much wider than a face (see `defaultScale` in the registry).
+ * Only ever a starting point: an existing saved record wins, and the fit slider
+ * wins over both.
+ */
+function defaultFitFor(collectionId: string | null): MaskFit {
+  return { ...DEFAULT_FIT, scaleOffset: defaultFitScaleOffset(collectionId) };
+}
 
 /** Travel is relative to the rendered mask width. */
 const FIT_RANGE = {
@@ -289,9 +301,9 @@ export function MaskPreparationFlow({
             anchorOffsetY: existingRecord.anchorOffsetY,
             scaleOffset: existingRecord.scaleOffset,
           }
-        : DEFAULT_FIT,
+        : defaultFitFor(nft.collection),
     });
-  }, [starting.seedImage, complete, existingRecord]);
+  }, [starting.seedImage, complete, existingRecord, nft.collection]);
 
   if (starting.status === "error") {
     return (
@@ -343,6 +355,7 @@ export function MaskPreparationFlow({
               videoRef={videoRef}
               landmarkerRef={landmarkerRef}
               canvasRef={canvasRef}
+              fit={defaultFitFor(nft.collection)}
               onKeepFull={keepFullCharacter}
               onAdjust={() => setStage("edit")}
             />
@@ -362,7 +375,7 @@ export function MaskPreparationFlow({
                       anchorOffsetY: existingRecord.anchorOffsetY,
                       scaleOffset: existingRecord.scaleOffset,
                     }
-                  : DEFAULT_FIT
+                  : defaultFitFor(nft.collection)
               }
               videoRef={videoRef}
               landmarkerRef={landmarkerRef}
@@ -681,6 +694,7 @@ function MaskChoice({
   seedImage,
   placement,
   maskFlip,
+  fit,
   videoRef,
   landmarkerRef,
   canvasRef,
@@ -690,6 +704,9 @@ function MaskChoice({
   seedImage: HTMLImageElement;
   placement: MaskPlacement | null;
   maskFlip: boolean;
+  /** The starting fit — so this preview shows the same size the mask will
+   *  actually be worn at, including a collection's own `defaultScale`. */
+  fit: MaskFit;
   videoRef: RefObject<HTMLVideoElement | null>;
   landmarkerRef: RefObject<FaceLandmarker | null>;
   canvasRef: RefObject<HTMLCanvasElement | null>;
@@ -718,7 +735,7 @@ function MaskChoice({
             nftImage={seedImage}
             placement={placement}
             maskFlip={maskFlip}
-            fit={DEFAULT_FIT}
+            fit={fit}
             className="absolute inset-0 h-full w-full object-cover"
           />
           <span className="pointer-events-none absolute left-3 top-3 rounded-full border border-banana/35 bg-screen/75 px-3 py-1 font-[family-name:var(--font-display)] text-[9px] text-banana backdrop-blur">
@@ -1256,7 +1273,7 @@ function MaskPrepEditor({
     setFit((prev) => ({ ...prev, ...patch }));
   };
 
-  const resetFit = () => setFit(DEFAULT_FIT);
+  const resetFit = () => setFit(defaultFitFor(collectionId));
 
   const complete = async () => {
     const canvas = editCanvasRef.current;

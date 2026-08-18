@@ -1,5 +1,5 @@
 import type { Collection, CollectionData, NFT } from "./types";
-import { BASE_PATH } from "./basePath";
+import { BASE_PATH, withBasePath } from "./basePath";
 
 /**
  * Runtime NFT data access — pure static, zero backend.
@@ -53,6 +53,10 @@ export function preloadCollection(collection: Collection): void {
  * now 502s, which is what broke SMB image loading.)
  */
 export function resilientImage(url: string): string {
+  // A hand-shipped collection (`via: "local"`) indexes its art as a
+  // root-relative path rather than an absolute URL. Next never rewrites raw
+  // string asset paths, so the deploy's basePath has to be added here.
+  if (url.startsWith("/")) return withBasePath(url);
   return url;
 }
 

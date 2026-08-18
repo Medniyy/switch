@@ -9,17 +9,21 @@ import { PixelButton } from "@/components/ui/PixelButton";
 interface NFTPreviewCardProps {
   nft: NFT;
   onUse: () => void;
+  /** Fit the whole artwork inside the square instead of filling it. For art
+   *  that is wider than it is tall, or already transparent, where cropping to
+   *  a square would cut the silhouette that makes it recognisable. */
+  contain?: boolean;
 }
 
 /** The "you found it" card — image, name, and the primary CTA. */
-export function NFTPreviewCard({ nft, onUse }: NFTPreviewCardProps) {
+export function NFTPreviewCard({ nft, onUse, contain = false }: NFTPreviewCardProps) {
   return (
     <PixelCard accent className="w-full max-w-sm mx-auto p-3">
       <div className="aspect-square bg-screen overflow-hidden border-[3px] border-screen">
         <NFTThumb
           src={nft.image}
           alt={nft.name}
-          className="w-full h-full object-cover"
+          className={`w-full h-full ${contain ? "object-contain p-2" : "object-cover"}`}
         />
       </div>
       <div className="mt-3 flex items-center justify-between gap-2">

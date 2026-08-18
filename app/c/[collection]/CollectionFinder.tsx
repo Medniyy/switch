@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ExternalLink } from "lucide-react";
 import type { NFT } from "@/lib/types";
 import { collectionOpenEvent, trackEvent } from "@/lib/analytics";
-import { getCollection } from "@/lib/collections";
+import { DEFAULT_ACCENT, getCollection } from "@/lib/collections";
 import { getNFT, getNFTs, preloadCollection } from "@/lib/nftData";
 import { addRecent, getRecent } from "@/lib/recentlyViewed";
 import { useAppStore } from "@/store/useAppStore";
@@ -79,13 +79,37 @@ export function CollectionFinder() {
     };
   }, [collectionId]);
 
+  // A single-token collection has nothing to search for — resolve its one token
+  // as soon as the page opens and go straight to the "wear it" card.
+  const singleToken = meta?.singleToken;
+  useEffect(() => {
+    if (!singleToken) return;
+    let cancelled = false;
+    setStatus("loading");
+    getNFT(collectionId, singleToken)
+      .then((nft) => {
+        if (cancelled) return;
+        setResult(nft);
+        setStatus(nft ? "found" : "notfound");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setResult(null);
+        setStatus("notfound");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [collectionId, singleToken]);
+
   // Editing the number clears any shown result; it never hits data on its own.
   const searchSeq = useRef(0);
   useEffect(() => {
+    if (singleToken) return; // no query to react to — see the effect above
     searchSeq.current += 1;
     setStatus("idle");
     setResult(null);
-  }, [query]);
+  }, [query, singleToken]);
 
   const runSearch = useCallback(async () => {
     const num = Number(query);
@@ -129,6 +153,8 @@ export function CollectionFinder() {
     );
   }
 
+  const accent = meta.accent ?? DEFAULT_ACCENT;
+
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 md:px-8 py-3 md:py-12 landscape:py-2">
       <header className="flex shrink-0 flex-col gap-2 md:gap-3">
@@ -145,14 +171,45 @@ export function CollectionFinder() {
             {meta.name}
           </h1>
           <p className="text-cream/60 text-base md:text-xl mt-1 md:mt-2 landscape:hidden md:landscape:block">
-            Type your number. Wear it. Snap it.
+            {meta.singleToken
+              ? "A limited edition wear. Put it on. Snap it."
+              : "Type your number. Wear it. Snap it."}
           </p>
+          {/* Where the drop itself lives. Right under the title, because someone
+              who just found the mask is exactly the person who wants it. */}
+          {meta.link && (
+            <a
+              href={meta.link.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex items-center gap-2 rounded-full border px-4 py-2 font-[family-name:var(--font-display)] text-[11px] transition-colors hover:bg-white/5"
+              style={{ borderColor: `${accent}66`, color: accent }}
+            >
+              Get it at {meta.link.label}
+              <ExternalLink size={13} strokeWidth={2.5} />
+            </a>
+          )}
         </div>
       </header>
 
-      {/* The number/search/keypad composition. On portrait mobile it flex-fills
-          and centres inside the usable region (below the header, above the tab
-          bar) for balanced spacing; desktop keeps its top-aligned layout. */}
+      {/* One-of-one: no number to type, so the token itself is the whole body
+          of the page. Resolved on mount by the effect above. */}
+      {meta.singleToken ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 min-h-0 md:mt-10 md:flex-none md:justify-start">
+          {status === "loading" && <BlinkingCursor label="LOADING" />}
+          {status === "notfound" && (
+            <p className="font-[family-name:var(--font-display)] text-pixelred text-xs text-center">
+              [ {meta.tag.toUpperCase()} ART NOT INSTALLED ]
+            </p>
+          )}
+          {status === "found" && result && (
+            <NFTPreviewCard nft={result} onUse={() => handleUse(result)} contain />
+          )}
+        </div>
+      ) : (
+      /* The number/search/keypad composition. On portrait mobile it flex-fills
+         and centres inside the usable region (below the header, above the tab
+         bar) for balanced spacing; desktop keeps its top-aligned layout. */
       <div className="flex flex-1 flex-col justify-center gap-3 min-h-0 md:mt-10 md:flex-none md:justify-start md:gap-10 landscape:gap-2">
 
       {/* Desktop: text input + search */}
@@ -205,8 +262,9 @@ export function CollectionFinder() {
         )}
       </div>
       </div>
+      )}
 
-      {gallery.length > 0 && (
+      {!meta.singleToken && gallery.length > 0 && (
         <NFTGrid
           title="RECENTLY WORN"
           nfts={gallery}

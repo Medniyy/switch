@@ -98,6 +98,11 @@ async function download(url: string, dest: string): Promise<void> {
 (async () => {
   ensureDir(COVERS_DIR);
   for (const c of COLLECTIONS) {
+    // Hand-shipped collections ship their own cover — leave it alone.
+    if (c.fetch.via === "local") {
+      console.log(`- ${c.id}: hand-shipped cover (skipped)`);
+      continue;
+    }
     try {
       const primary = c.coverFromToken
         ? null
